@@ -1,0 +1,346 @@
+-- =============================================================================
+--  V1 – Complete Baseline Schema
+--  Single source of truth for the entire database structure.
+--  Run once on a fresh database; all statements are idempotent (IF NOT EXISTS).
+-- =============================================================================
+
+SET FOREIGN_KEY_CHECKS = 0;
+
+-- =============================================================================
+-- MASTER LOOKUP TABLES
+-- All use a simple VARCHAR(20) PK with sequential numeric IDs ("1","2","3")
+-- and a uniform (status ENUM) column. The application manages ID generation.
+-- =============================================================================
+
+CREATE TABLE IF NOT EXISTS departments (
+    department_id    VARCHAR(20)               NOT NULL PRIMARY KEY,
+    department_name  VARCHAR(200)              NOT NULL UNIQUE,
+    status           ENUM('ACTIVE','INACTIVE') NOT NULL DEFAULT 'ACTIVE'
+) ENGINE=InnoDB;
+
+CREATE TABLE IF NOT EXISTS roles (
+    role_id    VARCHAR(20)               NOT NULL PRIMARY KEY,
+    role_name  VARCHAR(200)              NOT NULL UNIQUE,
+    status     ENUM('ACTIVE','INACTIVE') NOT NULL DEFAULT 'ACTIVE'
+) ENGINE=InnoDB;
+
+CREATE TABLE IF NOT EXISTS designations (
+    designation_id    VARCHAR(20)               NOT NULL PRIMARY KEY,
+    designation_name  VARCHAR(200)              NOT NULL UNIQUE,
+    status            ENUM('ACTIVE','INACTIVE') NOT NULL DEFAULT 'ACTIVE'
+) ENGINE=InnoDB;
+
+CREATE TABLE IF NOT EXISTS requirement_types (
+    requirement_type_id  VARCHAR(20)               NOT NULL PRIMARY KEY,
+    requirement_name     VARCHAR(200)              NOT NULL UNIQUE,
+    status               ENUM('ACTIVE','INACTIVE') NOT NULL DEFAULT 'ACTIVE'
+) ENGINE=InnoDB;
+
+CREATE TABLE IF NOT EXISTS task_types (
+    task_type_id  VARCHAR(20)               NOT NULL PRIMARY KEY,
+    task_name     VARCHAR(200)              NOT NULL UNIQUE,
+    status        ENUM('ACTIVE','INACTIVE') NOT NULL DEFAULT 'ACTIVE'
+) ENGINE=InnoDB;
+
+CREATE TABLE IF NOT EXISTS regions (
+    region_id    VARCHAR(20)               NOT NULL PRIMARY KEY,
+    region_name  VARCHAR(200)              NOT NULL UNIQUE,
+    status       ENUM('ACTIVE','INACTIVE') NOT NULL DEFAULT 'ACTIVE'
+) ENGINE=InnoDB;
+
+CREATE TABLE IF NOT EXISTS audiences (
+    audience_id    VARCHAR(20)               NOT NULL PRIMARY KEY,
+    audience_name  VARCHAR(200)              NOT NULL UNIQUE,
+    status         ENUM('ACTIVE','INACTIVE') NOT NULL DEFAULT 'ACTIVE'
+) ENGINE=InnoDB;
+
+CREATE TABLE IF NOT EXISTS offer_types (
+    offer_type_id    VARCHAR(20)               NOT NULL PRIMARY KEY,
+    offer_type_name  VARCHAR(200)              NOT NULL UNIQUE,
+    status           ENUM('ACTIVE','INACTIVE') NOT NULL DEFAULT 'ACTIVE'
+) ENGINE=InnoDB;
+
+CREATE TABLE IF NOT EXISTS vendor_types (
+    vendor_type_id    VARCHAR(20)               NOT NULL PRIMARY KEY,
+    vendor_type_name  VARCHAR(200)              NOT NULL UNIQUE,
+    status            ENUM('ACTIVE','INACTIVE') NOT NULL DEFAULT 'ACTIVE'
+) ENGINE=InnoDB;
+
+CREATE TABLE IF NOT EXISTS business_objectives (
+    business_objective_id    VARCHAR(20)               NOT NULL PRIMARY KEY,
+    business_objective_name  VARCHAR(200)              NOT NULL UNIQUE,
+    status                   ENUM('ACTIVE','INACTIVE') NOT NULL DEFAULT 'ACTIVE'
+) ENGINE=InnoDB;
+
+CREATE TABLE IF NOT EXISTS languages (
+    language_id    VARCHAR(20)               NOT NULL PRIMARY KEY,
+    language_name  VARCHAR(200)              NOT NULL UNIQUE,
+    status         ENUM('ACTIVE','INACTIVE') NOT NULL DEFAULT 'ACTIVE'
+) ENGINE=InnoDB;
+
+CREATE TABLE IF NOT EXISTS tones (
+    tone_id    VARCHAR(20)               NOT NULL PRIMARY KEY,
+    tone_name  VARCHAR(200)              NOT NULL UNIQUE,
+    status     ENUM('ACTIVE','INACTIVE') NOT NULL DEFAULT 'ACTIVE'
+) ENGINE=InnoDB;
+
+CREATE TABLE IF NOT EXISTS supporting_proofs (
+    supporting_proof_id    VARCHAR(20)               NOT NULL PRIMARY KEY,
+    supporting_proof_name  VARCHAR(200)              NOT NULL UNIQUE,
+    status                 ENUM('ACTIVE','INACTIVE') NOT NULL DEFAULT 'ACTIVE'
+) ENGINE=InnoDB;
+
+CREATE TABLE IF NOT EXISTS budget_tiers (
+    budget_tier_id    VARCHAR(20)               NOT NULL PRIMARY KEY,
+    budget_tier_name  VARCHAR(200)              NOT NULL UNIQUE,
+    status            ENUM('ACTIVE','INACTIVE') NOT NULL DEFAULT 'ACTIVE'
+) ENGINE=InnoDB;
+
+CREATE TABLE IF NOT EXISTS kpi_types (
+    kpi_type_id    VARCHAR(20)               NOT NULL PRIMARY KEY,
+    kpi_type_name  VARCHAR(200)              NOT NULL UNIQUE,
+    status         ENUM('ACTIVE','INACTIVE') NOT NULL DEFAULT 'ACTIVE'
+) ENGINE=InnoDB;
+
+CREATE TABLE IF NOT EXISTS expected_outputs (
+    expected_output_id    VARCHAR(20)               NOT NULL PRIMARY KEY,
+    expected_output_name  VARCHAR(200)              NOT NULL UNIQUE,
+    status                ENUM('ACTIVE','INACTIVE') NOT NULL DEFAULT 'ACTIVE'
+) ENGINE=InnoDB;
+
+-- =============================================================================
+-- GRANULAR TASKS  (reference codes: TASK-1 … TASK-35)
+-- =============================================================================
+
+CREATE TABLE IF NOT EXISTS granular_tasks (
+    task_id        VARCHAR(20)               NOT NULL PRIMARY KEY,
+    task_name      VARCHAR(255)              NOT NULL UNIQUE,
+    task_type_id   VARCHAR(20)               NOT NULL,
+    task_category  VARCHAR(100),
+    status         ENUM('ACTIVE','INACTIVE') NOT NULL DEFAULT 'ACTIVE',
+    CONSTRAINT fk_gt_task_type FOREIGN KEY (task_type_id)
+        REFERENCES task_types(task_type_id) ON DELETE RESTRICT
+) ENGINE=InnoDB;
+
+-- =============================================================================
+-- ROUTING ENGINE CONFIG
+-- =============================================================================
+
+CREATE TABLE IF NOT EXISTS requirement_role_mapping (
+    mapping_id           INT                       NOT NULL AUTO_INCREMENT PRIMARY KEY,
+    requirement_type_id  VARCHAR(20)               NOT NULL,
+    default_role_id      VARCHAR(20)               NOT NULL,
+    status               ENUM('ACTIVE','INACTIVE') NOT NULL DEFAULT 'ACTIVE',
+    UNIQUE KEY uq_req_role (requirement_type_id),
+    CONSTRAINT fk_rrm_req  FOREIGN KEY (requirement_type_id)
+        REFERENCES requirement_types(requirement_type_id) ON DELETE CASCADE,
+    CONSTRAINT fk_rrm_role FOREIGN KEY (default_role_id)
+        REFERENCES roles(role_id) ON DELETE CASCADE
+) ENGINE=InnoDB;
+
+CREATE TABLE IF NOT EXISTS role_task_mapping (
+    mapping_id  INT                       NOT NULL AUTO_INCREMENT PRIMARY KEY,
+    role_id     VARCHAR(20)               NOT NULL,
+    task_id     VARCHAR(20)               NOT NULL,
+    status      ENUM('ACTIVE','INACTIVE') NOT NULL DEFAULT 'ACTIVE',
+    UNIQUE KEY uq_role_task (role_id, task_id),
+    CONSTRAINT fk_rtm_role FOREIGN KEY (role_id)
+        REFERENCES roles(role_id) ON DELETE CASCADE,
+    CONSTRAINT fk_rtm_task FOREIGN KEY (task_id)
+        REFERENCES granular_tasks(task_id) ON DELETE CASCADE
+) ENGINE=InnoDB;
+
+-- =============================================================================
+-- USERS
+-- =============================================================================
+
+CREATE TABLE IF NOT EXISTS users (
+    user_id                INT                       NOT NULL AUTO_INCREMENT PRIMARY KEY,
+    full_name              VARCHAR(255)              NOT NULL,
+    email                  VARCHAR(255)              NOT NULL UNIQUE,
+    password_hash          VARCHAR(255)              NOT NULL,
+    department_id          VARCHAR(20),
+    role_id                VARCHAR(20),
+    designation_id         VARCHAR(20),
+    skill_level            ENUM('SENIOR','JUNIOR','INTERN'),
+    current_active_tasks   INT                       DEFAULT 0,
+    status                 ENUM('ACTIVE','INACTIVE') NOT NULL DEFAULT 'ACTIVE',
+    created_at             TIMESTAMP                 DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT fk_users_dept        FOREIGN KEY (department_id)   REFERENCES departments(department_id) on delete cascade,
+    CONSTRAINT fk_users_role        FOREIGN KEY (role_id)         REFERENCES roles(role_id) on delete cascade,
+    CONSTRAINT fk_users_designation FOREIGN KEY (designation_id)  REFERENCES designations(designation_id) on delete cascade
+) ENGINE=InnoDB;
+
+-- =============================================================================
+-- CAMPAIGNS
+-- All previously-enum form fields are stored as plain VARCHAR strings.
+-- Multi-select fields (audience, tone, vendor_type, language) store
+-- comma-separated display names for zero-JOIN reads.
+-- =============================================================================
+
+CREATE TABLE IF NOT EXISTS campaigns (
+    campaign_id               INT                        NOT NULL AUTO_INCREMENT PRIMARY KEY,
+    requestor_id              INT                        NOT NULL,
+    department_id             VARCHAR(20),
+    target_location           TEXT,
+    business_objective        VARCHAR(200),
+    requirement_type_id       VARCHAR(200),
+    audience_type_id          VARCHAR(500),
+    language                  VARCHAR(500),
+    has_offer                 VARCHAR(3)                 NOT NULL DEFAULT 'NO',
+    offer_type_id             VARCHAR(200),
+    key_message               VARCHAR(500),
+    supporting_proof          VARCHAR(200),
+    tone                      VARCHAR(500),
+    priority                  ENUM('HIGH','MEDIUM','LOW') NOT NULL DEFAULT 'MEDIUM',
+    budget_tier               VARCHAR(200),
+    vendor_required           VARCHAR(3)                 NOT NULL DEFAULT 'NO',
+    vendor_type               VARCHAR(500),
+    kpi_type                  VARCHAR(200),
+    expected_output           VARCHAR(200),
+    deadline                  DATE,
+    status                    ENUM(
+                                  'IN_PROGRESS',
+                                  'QC_REVIEW',
+                                  'COMPLETED',
+                                  'REJECTED',
+                                  'CANCELLED'
+                              )                         NOT NULL DEFAULT 'IN_PROGRESS',
+    routing_notes             VARCHAR(1000),
+    flagged_inconsistency     TINYINT(1)                 NOT NULL DEFAULT 0,
+    inconsistency_reason      VARCHAR(500),
+    rejection_reason          VARCHAR(1000),
+    created_at                TIMESTAMP                  DEFAULT CURRENT_TIMESTAMP,
+    updated_at                TIMESTAMP                  DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    CONSTRAINT fk_camp_requestor FOREIGN KEY (requestor_id)   REFERENCES users(user_id),
+    CONSTRAINT fk_camp_dept      FOREIGN KEY (department_id)  REFERENCES departments(department_id)
+) ENGINE=InnoDB;
+
+-- =============================================================================
+-- CAMPAIGN DELIVERABLES
+-- =============================================================================
+
+CREATE TABLE IF NOT EXISTS campaign_deliverables (
+    spec_id           INT         NOT NULL AUTO_INCREMENT PRIMARY KEY,
+    campaign_id       INT         NOT NULL,
+    granular_task_id  VARCHAR(20) NOT NULL,
+    CONSTRAINT fk_cd_campaign FOREIGN KEY (campaign_id)
+        REFERENCES campaigns(campaign_id) ON DELETE CASCADE,
+    CONSTRAINT fk_cd_task     FOREIGN KEY (granular_task_id)
+        REFERENCES granular_tasks(task_id)
+) ENGINE=InnoDB;
+
+-- =============================================================================
+-- WORK TASKS
+-- task_id uses sequential VARCHAR codes (WORK-TASK-1, WORK-TASK-2, …)
+-- =============================================================================
+
+CREATE TABLE IF NOT EXISTS work_tasks (
+    task_id                    VARCHAR(20)   NOT NULL PRIMARY KEY,
+    campaign_id                INT           NOT NULL,
+    assigned_to                INT,
+    granular_task_id           VARCHAR(20),
+    status                     ENUM(
+                                   'ASSIGNED','ACCEPTED','IN_PROGRESS',
+                                   'QC_REVIEW','REWORK','COMPLETED',
+                                   'HELD','CANCELLED'
+                               )             NOT NULL DEFAULT 'ASSIGNED',
+    assigned_at                TIMESTAMP     NULL,
+    accepted_at                TIMESTAMP     NULL,
+    started_at                 TIMESTAMP     NULL,
+    submitted_at               TIMESTAMP     NULL,
+    completed_at               TIMESTAMP     NULL,
+    total_time_logged_minutes  INT           DEFAULT 0,
+    dynamic_deadline           TIMESTAMP     NULL,
+    submission_notes           TEXT,
+    asset_url                  TEXT,
+    rework_count               INT           DEFAULT 0,
+    created_at                 TIMESTAMP     DEFAULT CURRENT_TIMESTAMP,
+    updated_at                 TIMESTAMP     DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    CONSTRAINT fk_wt_campaign  FOREIGN KEY (campaign_id)      REFERENCES campaigns(campaign_id)   ON DELETE CASCADE,
+    CONSTRAINT fk_wt_user      FOREIGN KEY (assigned_to)      REFERENCES users(user_id),
+    CONSTRAINT fk_wt_gran_task FOREIGN KEY (granular_task_id) REFERENCES granular_tasks(task_id)
+) ENGINE=InnoDB;
+
+-- =============================================================================
+-- DYNAMIC QUESTIONS  (reference codes: QUES-1 … QUES-N)
+-- =============================================================================
+
+CREATE TABLE IF NOT EXISTS dynamic_questions (
+    question_id   VARCHAR(20)                              NOT NULL PRIMARY KEY,
+    question_text VARCHAR(1000)                            NOT NULL,
+    field_type    ENUM('TEXT','NUMBER','TEXTAREA',
+                       'DROPDOWN','MULTISELECT','DATE',
+                       'FILE','CHECKBOX')                  NOT NULL DEFAULT 'TEXT',
+    options       JSON,
+    is_required   TINYINT(1)                              NOT NULL DEFAULT 0
+) ENGINE=InnoDB;
+
+CREATE TABLE IF NOT EXISTS task_question_mapping (
+    granular_task_id  VARCHAR(20) NOT NULL,
+    question_id       VARCHAR(20) NOT NULL,
+    PRIMARY KEY (granular_task_id, question_id),
+    CONSTRAINT fk_tqm_task     FOREIGN KEY (granular_task_id) REFERENCES granular_tasks(task_id)     ON DELETE CASCADE,
+    CONSTRAINT fk_tqm_question FOREIGN KEY (question_id)      REFERENCES dynamic_questions(question_id) ON DELETE CASCADE
+) ENGINE=InnoDB;
+
+CREATE TABLE IF NOT EXISTS work_task_answers (
+    answer_id     VARCHAR(20)  NOT NULL PRIMARY KEY,
+    work_task_id  VARCHAR(20)  NOT NULL,
+    question_id   VARCHAR(20)  NOT NULL,
+    answer_value  TEXT,
+    CONSTRAINT fk_wta_task     FOREIGN KEY (work_task_id) REFERENCES work_tasks(task_id)            ON DELETE CASCADE,
+    CONSTRAINT fk_wta_question FOREIGN KEY (question_id)  REFERENCES dynamic_questions(question_id) ON DELETE CASCADE
+) ENGINE=InnoDB;
+
+-- =============================================================================
+-- APPROVALS LOG
+-- =============================================================================
+
+CREATE TABLE IF NOT EXISTS approvals_log (
+    log_id        INT          NOT NULL AUTO_INCREMENT PRIMARY KEY,
+    campaign_id   INT,
+    task_id       VARCHAR(20)  NOT NULL,
+    reviewer_id   INT          NOT NULL,
+    action_taken  ENUM('APPROVED','NEEDS_REWORK','REJECTED','REQUESTOR_REWORK') NOT NULL,
+    comments      TEXT,
+    created_at    TIMESTAMP    DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT fk_al_task     FOREIGN KEY (task_id)     REFERENCES work_tasks(task_id)  ON DELETE CASCADE,
+    CONSTRAINT fk_al_reviewer FOREIGN KEY (reviewer_id) REFERENCES users(user_id),
+    CONSTRAINT fk_al_campaign FOREIGN KEY (campaign_id) REFERENCES campaigns(campaign_id) ON DELETE SET NULL
+) ENGINE=InnoDB;
+
+-- =============================================================================
+-- CAMPAIGN FILES
+-- Campaign-level reference / supporting files uploaded by the requestor.
+-- Shown in all briefs for the campaign (not tied to any individual task).
+-- =============================================================================
+
+CREATE TABLE IF NOT EXISTS campaign_files (
+    file_id      INT          NOT NULL AUTO_INCREMENT PRIMARY KEY,
+    campaign_id  INT          NOT NULL,
+    file_url     TEXT         NOT NULL,
+    file_name    VARCHAR(500),
+    uploaded_at  TIMESTAMP    DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT fk_cf_campaign FOREIGN KEY (campaign_id)
+        REFERENCES campaigns(campaign_id) ON DELETE CASCADE
+) ENGINE=InnoDB;
+
+-- =============================================================================
+-- LEAD QUALITY METRICS
+-- =============================================================================
+
+CREATE TABLE IF NOT EXISTS lead_quality_metrics (
+    lead_id                INT              NOT NULL AUTO_INCREMENT PRIMARY KEY,
+    campaign_id            INT              NOT NULL,
+    crm_lead_reference_id  VARCHAR(255)     UNIQUE,
+    lead_status            ENUM('HOT','WARM','COLD'),
+    is_converted           ENUM('YES','NO') NOT NULL DEFAULT 'NO',
+    revenue_generated      DECIMAL(10,2)    DEFAULT 0.00,
+    generated_at           TIMESTAMP        NULL,
+    status                 ENUM('ACTIVE','INACTIVE') NOT NULL DEFAULT 'ACTIVE',
+    updated_at             TIMESTAMP        DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    CONSTRAINT fk_lqm_campaign FOREIGN KEY (campaign_id) REFERENCES campaigns(campaign_id)
+) ENGINE=InnoDB;
+
+SET FOREIGN_KEY_CHECKS = 1;
