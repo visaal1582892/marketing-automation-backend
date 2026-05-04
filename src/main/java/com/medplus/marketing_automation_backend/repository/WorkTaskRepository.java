@@ -47,7 +47,15 @@ public class WorkTaskRepository {
                        AND al.action_taken = 'NEEDS_REWORK') AS rework_count,
                    (SELECT COUNT(*) FROM approvals_log al
                      WHERE al.task_id = wt.task_id
-                       AND al.action_taken = 'REQUESTOR_REWORK') AS requestor_rework_count
+                       AND al.action_taken = 'REQUESTOR_REWORK') AS requestor_rework_count,
+                   (SELECT al.comments FROM approvals_log al
+                     WHERE al.task_id = wt.task_id
+                       AND al.action_taken = 'NEEDS_REWORK'
+                     ORDER BY al.created_at DESC LIMIT 1) AS latest_manager_rework_comment,
+                   (SELECT al.comments FROM approvals_log al
+                     WHERE al.task_id = wt.task_id
+                       AND al.action_taken = 'REQUESTOR_REWORK'
+                     ORDER BY al.created_at DESC LIMIT 1) AS latest_requestor_rework_comment
             FROM work_tasks wt
             LEFT JOIN users             u   ON u.user_id              = wt.assigned_to
             LEFT JOIN granular_tasks    gt  ON gt.task_id             = wt.granular_task_id
@@ -240,12 +248,14 @@ public class WorkTaskRepository {
      * Saves a worker comment and flips the task to HELD.
      * Allowed from ASSIGNED, IN_PROGRESS, or REWORK — the worker is pausing their
      * own task to flag a blocker or ask a question to the requestor.
+     * pre_hold_status captures the current status so unhold can restore it exactly.
      */
     public int saveWorkerComment(String taskId, int userId, String comment) {
         return jdbc.update("""
                 UPDATE work_tasks
-                   SET worker_comment = :comment,
-                       status         = 'HELD'
+                   SET worker_comment  = :comment,
+                       pre_hold_status = status,
+                       status          = 'HELD'
                  WHERE task_id     = :id
                    AND assigned_to = :uid
                    AND status IN ('ASSIGNED','IN_PROGRESS','REWORK')
@@ -256,15 +266,18 @@ public class WorkTaskRepository {
     }
 
     /**
-     * Clears the worker comment and returns the task to ASSIGNED.
+     * Clears the worker comment and resumes the task, restoring the status it
+     * had before being held (captured in pre_hold_status). Falls back to ASSIGNED
+     * if pre_hold_status is NULL for any reason.
      * Called when the worker decides to resume work (their question was answered).
      */
     public int clearWorkerComment(String taskId, int userId) {
         return jdbc.update("""
                 UPDATE work_tasks
-                   SET worker_comment = NULL,
-                       status         = 'ASSIGNED',
-                       assigned_at    = :now
+                   SET worker_comment  = NULL,
+                       status          = COALESCE(pre_hold_status, 'ASSIGNED'),
+                       pre_hold_status = NULL,
+                       assigned_at     = :now
                  WHERE task_id     = :id
                    AND assigned_to = :uid
                    AND status      = 'HELD'
@@ -276,17 +289,17 @@ public class WorkTaskRepository {
     }
 
     /**
-     * Clears the worker comment and resumes a HELD task — called by the
-     * requestor path when they save updated answers, acknowledging the comment.
-     * No userId guard is needed here because the caller is the requestor,
-     * not the assigned worker.
+     * Clears the worker comment and resumes a HELD task, restoring the pre-hold
+     * status — called by the requestor path when they save updated answers,
+     * acknowledging the comment. No userId guard needed (caller is the requestor).
      */
     public int clearWorkerCommentByTaskId(String taskId) {
         return jdbc.update("""
                 UPDATE work_tasks
-                   SET worker_comment = NULL,
-                       status         = 'ASSIGNED',
-                       assigned_at    = :now
+                   SET worker_comment  = NULL,
+                       status          = COALESCE(pre_hold_status, 'ASSIGNED'),
+                       pre_hold_status = NULL,
+                       assigned_at     = :now
                  WHERE task_id        = :id
                    AND status         = 'HELD'
                    AND worker_comment IS NOT NULL
@@ -466,6 +479,30 @@ public class WorkTaskRepository {
     }
 
     /**
+     * All COMPLETED work tasks belonging to campaigns requested by the given
+     * requestor. Used by the requestor's "Completed Tasks" page to show every
+     * approved deliverable along with its submitted assets.
+     * Ordered newest-first by completed_at so the most recently approved task
+     * appears at the top.
+     */
+    public List<WorkTask> findCompletedByRequestorId(int requestorId) {
+        String sql = SELECT_BASE +
+                " WHERE c.requestor_id = :requestorId AND wt.status = 'COMPLETED'" +
+                " ORDER BY wt.completed_at DESC";
+        return jdbc.query(sql,
+                new MapSqlParameterSource("requestorId", requestorId),
+                WorkTaskRepository::map);
+    }
+
+    /** All COMPLETED work tasks across every campaign — for admin / manager views. */
+    public List<WorkTask> findAllCompleted() {
+        String sql = SELECT_BASE +
+                " WHERE wt.status = 'COMPLETED'" +
+                " ORDER BY wt.completed_at DESC";
+        return jdbc.query(sql, WorkTaskRepository::map);
+    }
+
+    /**
      * Returns the first work task matching the given granular_task_id in this campaign.
      * Used when deleting a task spec to locate and remove the linked work task.
      */
@@ -561,7 +598,9 @@ public class WorkTaskRepository {
                                           AND (:to   IS NULL OR wt.completed_at <= :to)
                                          THEN wt.total_time_logged_minutes ELSE 0 END), 0) AS minutes_logged
                 FROM users u
-                LEFT JOIN roles      r  ON r.role_id = u.role_id
+                LEFT JOIN user_roles ur ON ur.user_id = u.user_id
+                    AND ur.role_id = (SELECT MIN(ur2.role_id) FROM user_roles ur2 WHERE ur2.user_id = u.user_id)
+                LEFT JOIN roles      r  ON r.role_id  = ur.role_id
                 LEFT JOIN work_tasks wt ON wt.assigned_to = u.user_id
                 WHERE u.status = 'ACTIVE'
                 GROUP BY u.user_id, u.full_name, r.role_name
@@ -571,11 +610,135 @@ public class WorkTaskRepository {
     }
 
     // -------------------------------------------------------------------------
-    // Helpers
+    // Analytics summary — Reports dashboard
     // -------------------------------------------------------------------------
 
+    /**
+     * Returns a single aggregated snapshot used by the manager Reports page:
+     * campaign counts by status & priority, task counts by status, 8-week
+     * completion trend, team performance, and top rework offenders.
+     */
+    public java.util.Map<String, Object> analyticsSummary() {
+        java.util.Map<String, Object> result = new java.util.LinkedHashMap<>();
+
+        // ── Campaign counts by status ─────────────────────────────────────────
+        var campaignByStatus = jdbc.queryForList(
+                "SELECT status, COUNT(*) AS cnt FROM campaigns GROUP BY status",
+                new MapSqlParameterSource());
+        result.put("campaignsByStatus", campaignByStatus);
+
+        // ── Campaign counts by priority ───────────────────────────────────────
+        var campaignByPriority = jdbc.queryForList(
+                "SELECT priority, COUNT(*) AS cnt FROM campaigns GROUP BY priority ORDER BY FIELD(priority,'HIGH','MEDIUM','LOW')",
+                new MapSqlParameterSource());
+        result.put("campaignsByPriority", campaignByPriority);
+
+        // ── Campaigns by requirement type (top 8) ─────────────────────────────
+        var campaignByType = jdbc.queryForList(
+                """
+                SELECT rt.requirement_name AS name, COUNT(c.campaign_id) AS cnt
+                FROM campaigns c
+                JOIN requirement_types rt ON rt.requirement_type_id = c.requirement_type_id
+                GROUP BY rt.requirement_name ORDER BY cnt DESC LIMIT 8
+                """,
+                new MapSqlParameterSource());
+        result.put("campaignsByType", campaignByType);
+
+        // ── Task counts by status ─────────────────────────────────────────────
+        var taskByStatus = jdbc.queryForList(
+                "SELECT status, COUNT(*) AS cnt FROM work_tasks GROUP BY status",
+                new MapSqlParameterSource());
+        result.put("tasksByStatus", taskByStatus);
+
+        // ── Weekly completed tasks — last 10 weeks ────────────────────────────
+        var weeklyCompleted = jdbc.queryForList(
+                """
+                SELECT DATE_FORMAT(completed_at,'%Y-W%u') AS week,
+                       COUNT(*) AS cnt
+                FROM work_tasks
+                WHERE status = 'COMPLETED'
+                  AND completed_at >= DATE_SUB(NOW(), INTERVAL 10 WEEK)
+                GROUP BY week ORDER BY week
+                """,
+                new MapSqlParameterSource());
+        result.put("weeklyCompleted", weeklyCompleted);
+
+        // ── Weekly new campaigns — last 10 weeks ──────────────────────────────
+        var weeklyNew = jdbc.queryForList(
+                """
+                SELECT DATE_FORMAT(created_at,'%Y-W%u') AS week,
+                       COUNT(*) AS cnt
+                FROM campaigns
+                WHERE created_at >= DATE_SUB(NOW(), INTERVAL 10 WEEK)
+                GROUP BY week ORDER BY week
+                """,
+                new MapSqlParameterSource());
+        result.put("weeklyNew", weeklyNew);
+
+        // ── Team performance ──────────────────────────────────────────────────
+        var team = jdbc.queryForList(
+                """
+                SELECT u.full_name                                              AS name,
+                       COUNT(wt.task_id)                                        AS total,
+                       SUM(CASE WHEN wt.status = 'COMPLETED' THEN 1 ELSE 0 END) AS completed,
+                       SUM(CASE WHEN wt.status IN ('IN_PROGRESS','REWORK','QC_REVIEW','ASSIGNED') THEN 1 ELSE 0 END) AS active,
+                       COALESCE(SUM(wt.total_time_logged_minutes),0)            AS minutesLogged,
+                       COALESCE(SUM(
+                           (SELECT COUNT(*) FROM approvals_log al
+                            WHERE al.task_id = wt.task_id
+                              AND al.action_taken = 'NEEDS_REWORK')
+                       ),0)                                                     AS reworkCount
+                FROM users u
+                LEFT JOIN work_tasks wt ON wt.assigned_to = u.user_id
+                WHERE u.status = 'ACTIVE'
+                GROUP BY u.user_id, u.full_name
+                HAVING total > 0
+                ORDER BY completed DESC, total DESC
+                """,
+                new MapSqlParameterSource());
+        result.put("team", team);
+
+        // ── Top reworked tasks ────────────────────────────────────────────────
+        var topRework = jdbc.queryForList(
+                """
+                SELECT wt.task_id, gt.task_name, u.full_name AS assignee,
+                       COUNT(al.log_id) AS reworkCount,
+                       MAX(al.created_at) AS lastRework
+                FROM work_tasks wt
+                JOIN approvals_log al ON al.task_id = wt.task_id
+                                     AND al.action_taken = 'NEEDS_REWORK'
+                LEFT JOIN granular_tasks gt ON gt.task_id = wt.granular_task_id
+                LEFT JOIN users u ON u.user_id = wt.assigned_to
+                GROUP BY wt.task_id, gt.task_name, u.full_name
+                ORDER BY reworkCount DESC LIMIT 8
+                """,
+                new MapSqlParameterSource());
+        result.put("topRework", topRework);
+
+        // ── Totals ────────────────────────────────────────────────────────────
+        Integer totalCampaigns  = jdbc.queryForObject("SELECT COUNT(*) FROM campaigns",    new MapSqlParameterSource(), Integer.class);
+        Integer totalTasks      = jdbc.queryForObject("SELECT COUNT(*) FROM work_tasks WHERE status <> 'CANCELLED'", new MapSqlParameterSource(), Integer.class);
+        Integer completedTasks  = jdbc.queryForObject("SELECT COUNT(*) FROM work_tasks WHERE status = 'COMPLETED'",  new MapSqlParameterSource(), Integer.class);
+        Integer pendingQc       = jdbc.queryForObject("SELECT COUNT(*) FROM work_tasks WHERE status = 'QC_REVIEW'",  new MapSqlParameterSource(), Integer.class);
+        Integer inRework        = jdbc.queryForObject("SELECT COUNT(*) FROM work_tasks WHERE status = 'REWORK'",     new MapSqlParameterSource(), Integer.class);
+        Double  avgMinutes      = jdbc.queryForObject(
+                "SELECT AVG(total_time_logged_minutes) FROM work_tasks WHERE status='COMPLETED' AND total_time_logged_minutes > 0",
+                new MapSqlParameterSource(), Double.class);
+
+        result.put("totals", java.util.Map.of(
+                "campaigns",     totalCampaigns  == null ? 0 : totalCampaigns,
+                "tasks",         totalTasks      == null ? 0 : totalTasks,
+                "completed",     completedTasks  == null ? 0 : completedTasks,
+                "pendingQc",     pendingQc       == null ? 0 : pendingQc,
+                "inRework",      inRework        == null ? 0 : inRework,
+                "avgMinutes",    avgMinutes      == null ? 0.0 : Math.round(avgMinutes * 10.0) / 10.0
+        ));
+
+        return result;
+    }
+
     // -------------------------------------------------------------------------
-    // Custom ID generation
+    // Helpers
     // -------------------------------------------------------------------------
 
     /**
@@ -621,6 +784,8 @@ public class WorkTaskRepository {
                 .updatedAt(toLocalDateTime(rs, "updated_at"))
                 .reworkCount(getNullableInt(rs, "rework_count"))
                 .requestorReworkCount(getNullableInt(rs, "requestor_rework_count"))
+                .latestManagerReworkComment(rs.getString("latest_manager_rework_comment"))
+                .latestRequestorReworkComment(rs.getString("latest_requestor_rework_comment"))
                 .campaignDeadline(rs.getDate("campaign_deadline") == null ? null : rs.getDate("campaign_deadline").toLocalDate())
                 .campaignPriority(safeEnum(Priority.class, rs.getString("campaign_priority")))
                 .campaignStatus(safeEnum(CampaignStatus.class, rs.getString("campaign_status")))

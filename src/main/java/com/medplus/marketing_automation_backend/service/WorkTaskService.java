@@ -173,6 +173,11 @@ public class WorkTaskService {
         return workTaskRepo.timeSummary(from, to);
     }
 
+    /** Full analytics snapshot for the Reports dashboard. */
+    public java.util.Map<String, Object> analyticsSummary() {
+        return workTaskRepo.analyticsSummary();
+    }
+
     // -------------------------------------------------------------------------
     // Helpers
     // -------------------------------------------------------------------------

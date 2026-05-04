@@ -11,6 +11,7 @@ import com.medplus.marketing_automation_backend.enums.Priority;
 import com.medplus.marketing_automation_backend.enums.TaskStatus;
 import com.medplus.marketing_automation_backend.exception.BadRequestException;
 import com.medplus.marketing_automation_backend.exception.ResourceNotFoundException;
+import com.medplus.marketing_automation_backend.repository.CampaignBookmarkRepository;
 import com.medplus.marketing_automation_backend.repository.CampaignRepository;
 import com.medplus.marketing_automation_backend.repository.UserRepository;
 import com.medplus.marketing_automation_backend.repository.WorkTaskRepository;
@@ -29,25 +30,28 @@ import java.util.stream.Collectors;
 @Service
 public class CampaignService {
 
-    private final CampaignRepository     campaignRepo;
-    private final WorkTaskRepository     workTaskRepo;
-    private final UserRepository         userRepo;
-    private final RoutingEngineService   routingEngine;
-    private final QuestionnaireService   questionnaireService;
-    private final MasterDataService      masterDataService;
+    private final CampaignRepository        campaignRepo;
+    private final WorkTaskRepository        workTaskRepo;
+    private final UserRepository            userRepo;
+    private final RoutingEngineService      routingEngine;
+    private final QuestionnaireService      questionnaireService;
+    private final MasterDataService         masterDataService;
+    private final CampaignBookmarkRepository bookmarkRepo;
 
     public CampaignService(CampaignRepository campaignRepo,
                            WorkTaskRepository workTaskRepo,
                            UserRepository userRepo,
                            RoutingEngineService routingEngine,
                            QuestionnaireService questionnaireService,
-                           MasterDataService masterDataService) {
+                           MasterDataService masterDataService,
+                           CampaignBookmarkRepository bookmarkRepo) {
         this.campaignRepo          = campaignRepo;
         this.workTaskRepo          = workTaskRepo;
         this.userRepo              = userRepo;
         this.routingEngine         = routingEngine;
         this.questionnaireService  = questionnaireService;
         this.masterDataService     = masterDataService;
+        this.bookmarkRepo          = bookmarkRepo;
     }
 
     // -------------------------------------------------------------------------
@@ -161,14 +165,68 @@ public class CampaignService {
         return toDetailResponse(c);
     }
 
+    /** Detail with bookmark flag enriched for the given viewer. */
+    public CampaignResponse getDetail(int campaignId, int viewerUserId) {
+        CampaignResponse r = getDetail(campaignId);
+        r.setBookmarked(bookmarkRepo.isBookmarked(viewerUserId, campaignId));
+        return r;
+    }
+
     public List<CampaignResponse> listAll(boolean includeInactive) {
         return campaignRepo.findAll(includeInactive).stream()
                 .map(this::toSummaryResponse).collect(Collectors.toList());
     }
 
     public List<CampaignResponse> listMy(int requestorId) {
+        java.util.Set<Integer> bookmarked = bookmarkRepo.findBookmarkedCampaignIds(requestorId);
         return campaignRepo.findByRequestorId(requestorId).stream()
-                .map(this::toSummaryResponse).collect(Collectors.toList());
+                .map(c -> {
+                    CampaignResponse r = toSummaryResponse(c);
+                    r.setBookmarked(bookmarked.contains(c.getCampaignId()));
+                    return r;
+                })
+                .collect(Collectors.toList());
+    }
+
+    /** Returns only the campaigns bookmarked by this user, in bookmark order. */
+    public List<CampaignResponse> listBookmarked(int userId) {
+        java.util.Set<Integer> ids = bookmarkRepo.findBookmarkedCampaignIds(userId);
+        return campaignRepo.findByRequestorId(userId).stream()
+                .filter(c -> ids.contains(c.getCampaignId()))
+                .map(c -> {
+                    CampaignResponse r = toSummaryResponse(c);
+                    r.setBookmarked(true);
+                    return r;
+                })
+                .collect(Collectors.toList());
+    }
+
+    /**
+     * Toggles a bookmark for the given user + campaign.
+     * @return {@code true} if the campaign is now bookmarked, {@code false} if removed.
+     */
+    public boolean toggleBookmark(int userId, int campaignId) {
+        return bookmarkRepo.toggle(userId, campaignId);
+    }
+
+    /**
+     * Returns every COMPLETED work task across the given requestor's campaigns.
+     * Used by the requestor's "Completed Tasks" page — avoids the N+1 problem
+     * of loading each campaign's detail separately just to pick out its tasks.
+     */
+    public List<WorkTaskResponse> listCompletedTasksForRequestor(int requestorId) {
+        return workTaskRepo.findCompletedByRequestorId(requestorId).stream()
+                .map(CampaignService::toWorkTaskResponse)
+                .collect(Collectors.toList());
+    }
+
+    /**
+     * Returns every COMPLETED work task across all campaigns (admin / manager view).
+     */
+    public List<WorkTaskResponse> listAllCompletedTasks() {
+        return workTaskRepo.findAllCompleted().stream()
+                .map(CampaignService::toWorkTaskResponse)
+                .collect(Collectors.toList());
     }
 
     // -------------------------------------------------------------------------
@@ -367,6 +425,52 @@ public class CampaignService {
         String reason = detectInconsistency(newPriority, c.getBudgetTier());
         campaignRepo.updatePriority(campaignId, newPriority, reason != null, reason);
         return getDetail(campaignId);
+    }
+
+    // -------------------------------------------------------------------------
+    // Clone
+    // -------------------------------------------------------------------------
+
+    /**
+     * Creates a copy of the given campaign for the requesting user.
+     * Copies all brief fields but resets status, timestamps, and workflow state.
+     * No work-tasks are copied — the clone is a fresh request.
+     *
+     * @return the new campaign's ID
+     */
+    @Transactional
+    public int cloneCampaign(int sourceCampaignId, int requestorId) {
+        Campaign src = campaignRepo.findById(sourceCampaignId)
+                .orElseThrow(() -> new ResourceNotFoundException("Campaign not found: " + sourceCampaignId));
+
+        String inconsistencyReason = detectInconsistency(src.getPriority(),
+                src.getBudgetTierId() != null ? src.getBudgetTierId() : src.getBudgetTier());
+
+        Campaign clone = Campaign.builder()
+                .requestorId(requestorId)
+                .departmentId(src.getDepartmentId())
+                .targetLocation(src.getTargetLocation())
+                .businessObjective(src.getBusinessObjective())
+                .requirementTypeId(src.getRequirementTypeId())
+                .audienceTypeId(src.getAudienceTypeId())
+                .language(src.getLanguage())
+                .hasOffer(src.getHasOffer())
+                .offerTypeId(src.getOfferTypeId())
+                .keyMessage(src.getKeyMessage())
+                .supportingProof(src.getSupportingProof())
+                .tone(src.getTone())
+                .priority(src.getPriority())
+                .budgetTier(src.getBudgetTierId() != null ? src.getBudgetTierId() : src.getBudgetTier())
+                .vendorRequired(src.getVendorRequired())
+                .vendorType(src.getVendorType())
+                .kpiType(src.getKpiTypeId() != null ? src.getKpiTypeId() : src.getKpiType())
+                .expectedOutput(src.getExpectedOutputId() != null ? src.getExpectedOutputId() : src.getExpectedOutput())
+                .status(CampaignStatus.IN_PROGRESS)
+                .flaggedInconsistency(inconsistencyReason != null)
+                .inconsistencyReason(inconsistencyReason)
+                .build();
+
+        return campaignRepo.insert(clone);
     }
 
     // -------------------------------------------------------------------------
@@ -712,6 +816,8 @@ public class CampaignService {
                 .createdAt(wt.getCreatedAt())
                 .reworkCount(wt.getReworkCount())
                 .requestorReworkCount(wt.getRequestorReworkCount())
+                .latestManagerReworkComment(wt.getLatestManagerReworkComment())
+                .latestRequestorReworkComment(wt.getLatestRequestorReworkComment())
                 .build();
     }
 

@@ -56,6 +56,12 @@ public class WorkTask {
     /** Number of times the requestor has sent this task back for rework after it was COMPLETED. */
     private Integer       requestorReworkCount;
 
+    /** Latest comment from the marketing manager (NEEDS_REWORK) for this task. */
+    private String        latestManagerReworkComment;
+
+    /** Latest comment from the requestor (REQUESTOR_REWORK) for this task. */
+    private String        latestRequestorReworkComment;
+
     private LocalDateTime createdAt;
     private LocalDateTime updatedAt;
 

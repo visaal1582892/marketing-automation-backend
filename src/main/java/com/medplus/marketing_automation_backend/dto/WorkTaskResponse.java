@@ -61,6 +61,18 @@ public class WorkTaskResponse {
      */
     private Integer       requestorReworkCount;
 
+    /**
+     * Latest comment from the marketing manager (NEEDS_REWORK action).
+     * Shown in orange on the worker's task card when status is REWORK.
+     */
+    private String        latestManagerReworkComment;
+
+    /**
+     * Latest comment from the requestor (REQUESTOR_REWORK action).
+     * Shown in purple on the worker's task card when status is REWORK.
+     */
+    private String        latestRequestorReworkComment;
+
     /** Requestor/worker answers for mapped dynamic questions (campaign brief). */
     private List<WorkTaskQuestionnaireBriefItem> questionnaire;
 }

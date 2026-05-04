@@ -42,24 +42,60 @@ public class CampaignController {
         return ResponseEntity.status(201).body(response);
     }
 
-    /** List campaigns: admins/managers see all; others see only their own. */
+    /** List campaigns — always returns only the caller's own requests. */
     @GetMapping
     public List<CampaignResponse> list(
-            @RequestParam(defaultValue = "false") boolean includeInactive,
             @AuthenticationPrincipal CustomUserDetails principal) {
-        boolean isAdminOrManager = principal.getAuthorities().stream()
-                .anyMatch(a -> a.getAuthority().equals("ROLE_ADMIN")
-                        || a.getAuthority().equals("ROLE_MARKETING_MANAGER"));
-        if (isAdminOrManager) {
-            return campaignService.listAll(includeInactive);
-        }
         return campaignService.listMy(principal.getUser().getUserId().intValue());
+    }
+
+    /**
+     * Returns COMPLETED work tasks for the caller's own campaigns.
+     * Used by the requestor's "Completed Tasks" page.
+     */
+    @GetMapping("/completed-tasks")
+    public List<WorkTaskResponse> completedTasks(
+            @AuthenticationPrincipal CustomUserDetails principal) {
+        return campaignService.listCompletedTasksForRequestor(
+                principal.getUser().getUserId().intValue());
+    }
+
+    /** Returns the caller's bookmarked campaigns. */
+    @GetMapping("/bookmarked")
+    public List<CampaignResponse> bookmarked(@AuthenticationPrincipal CustomUserDetails principal) {
+        return campaignService.listBookmarked(principal.getUser().getUserId().intValue());
+    }
+
+    /**
+     * Toggles a bookmark for the calling user on the given campaign.
+     * Returns {@code { "bookmarked": true/false }}.
+     */
+    @PostMapping("/{id}/bookmark")
+    public Map<String, Boolean> toggleBookmark(@PathVariable int id,
+                                               @AuthenticationPrincipal CustomUserDetails principal) {
+        boolean now = campaignService.toggleBookmark(
+                principal.getUser().getUserId().intValue(), id);
+        return Map.of("bookmarked", now);
+    }
+
+    /**
+     * Clones a campaign — copies all brief fields into a new campaign owned by the caller.
+     * No tasks are copied; the clone is a fresh request with status IN_PROGRESS.
+     * Returns {@code { "campaignId": newId }}.
+     */
+    @PostMapping("/{id}/clone")
+    @PreAuthorize("hasAnyRole('ADMIN','REQUESTOR','MARKETING_MANAGER','HEAD','REGIONAL_MANAGER')")
+    public Map<String, Integer> cloneCampaign(@PathVariable int id,
+                                               @AuthenticationPrincipal CustomUserDetails principal) {
+        int newId = campaignService.cloneCampaign(id, principal.getUser().getUserId().intValue());
+        return Map.of("campaignId", newId);
     }
 
     /** Get full campaign detail including deliverable specs and work tasks. */
     @GetMapping("/{id}")
-    public CampaignResponse getById(@PathVariable int id) {
-        return campaignService.getDetail(id);
+    public CampaignResponse getById(@PathVariable int id,
+                                    @AuthenticationPrincipal CustomUserDetails principal) {
+        return campaignService.getDetail(id, principal.getUser().getUserId().intValue());
     }
 
     // -------------------------------------------------------------------------

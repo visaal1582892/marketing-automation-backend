@@ -62,6 +62,9 @@ public class CampaignResponse {
     private LocalDateTime createdAt;
     private LocalDateTime updatedAt;
 
+    /** True when the calling user has bookmarked this campaign. */
+    private Boolean       bookmarked;
+
     // Enriched — deliverable specs & work tasks for detail view
     private List<DeliverableResponse> deliverables;
     private List<WorkTaskResponse>    workTasks;

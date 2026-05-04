@@ -161,6 +161,16 @@ public class ManagerController {
     }
 
     /**
+     * Full analytics snapshot — powers the manager Reports dashboard.
+     * Returns campaign counts, task counts, weekly trends, team performance,
+     * and top rework offenders in a single call.
+     */
+    @GetMapping("/reports/analytics")
+    public Map<String, Object> analyticsReport() {
+        return workTaskService.analyticsSummary();
+    }
+
+    /**
      * Rework quality report — two views in one response:
      *
      *  byWorker : per-assignee rework totals + distinct tasks affected + last rework date.
