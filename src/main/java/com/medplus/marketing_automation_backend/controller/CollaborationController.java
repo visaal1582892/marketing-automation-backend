@@ -96,7 +96,7 @@ public class CollaborationController {
         TaskMessage saved = taskMessageService.sendMessage(
                 taskId, principal.getUser().getUserId().intValue(), text);
         // Broadcast to all WebSocket subscribers of this task's chat topic
-        messagingTemplate.convertAndSend("/topic/chat/" + taskId, saved);
+        messagingTemplate.convertAndSend("/topic/chat/" + taskId, (Object) saved);
         return saved;
     }
 
@@ -129,7 +129,8 @@ public class CollaborationController {
         event.put("userId",   principal.getUser().getUserId());
         event.put("userName", principal.getUser().getFullName());
         event.put("isTyping", payload != null && Boolean.TRUE.equals(payload.get("isTyping")));
-        messagingTemplate.convertAndSend("/topic/typing/" + taskId, event);
+        // Cast to Object avoids ambiguity between SimpMessagingTemplate overloads
+        messagingTemplate.convertAndSend("/topic/typing/" + taskId, (Object) event);
     }
 
     // ── Assets ────────────────────────────────────────────────────────────────
