@@ -49,16 +49,16 @@ public class WorkTaskController {
      * Body may contain:
      *  - submissionNotes : free-text notes for the QC reviewer.
      *  - assetUrls       : list of file URLs uploaded via POST /api/upload/asset.
-     *                      Serialised as a JSON array and stored in work_tasks.asset_url.
+     *                      Stored in the asset_info table (one row per URL).
      *  - assetUrl        : legacy single-URL field; used only when assetUrls is absent.
      */
     @PatchMapping("/{id}/complete")
     public WorkTaskResponse complete(@PathVariable String id,
                                      @RequestBody(required = false) TaskSubmissionRequest body,
                                      @AuthenticationPrincipal CustomUserDetails principal) {
-        String notes    = body == null ? null : body.getSubmissionNotes();
-        String assetUrl = resolveAssetUrl(body);
-        return workTaskService.complete(id, principal.getUser().getUserId().intValue(), notes, assetUrl);
+        String notes = body == null ? null : body.getSubmissionNotes();
+        List<String> assetUrls = resolveAssetUrls(body);
+        return workTaskService.complete(id, principal.getUser().getUserId().intValue(), notes, assetUrls);
     }
 
     /**
@@ -82,31 +82,14 @@ public class WorkTaskController {
         return workTaskService.workerUnhold(id, principal.getUser().getUserId().intValue());
     }
 
-    /**
-     * Converts the submission's asset references into a single string for storage.
-     * Multiple URLs → JSON array string  (e.g. ["url1","url2"])
-     * Single URL    → the URL itself     (backward-compatible plain string)
-     * None          → null
-     */
+    /** Returns a flat list of asset URLs from the request body. */
     @SuppressWarnings("deprecation")
-    private String resolveAssetUrl(TaskSubmissionRequest body) {
-        if (body == null) return null;
-
+    private List<String> resolveAssetUrls(TaskSubmissionRequest body) {
+        if (body == null) return List.of();
         List<String> urls = body.getAssetUrls();
-        if (urls != null && !urls.isEmpty()) {
-            if (urls.size() == 1) return urls.get(0);
-            return toJsonArray(urls);
-        }
-        return body.getAssetUrl(); // legacy field
-    }
-
-    /** Serialises a list of URL strings to a JSON array without requiring Jackson. */
-    private static String toJsonArray(List<String> urls) {
-        StringBuilder sb = new StringBuilder("[");
-        for (int i = 0; i < urls.size(); i++) {
-            if (i > 0) sb.append(",");
-            sb.append('"').append(urls.get(i).replace("\\", "\\\\").replace("\"", "\\\"")).append('"');
-        }
-        return sb.append(']').toString();
+        if (urls != null && !urls.isEmpty()) return urls;
+        // Legacy single-URL field
+        String single = body.getAssetUrl();
+        return (single != null && !single.isBlank()) ? List.of(single) : List.of();
     }
 }

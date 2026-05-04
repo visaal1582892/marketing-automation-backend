@@ -41,7 +41,6 @@ public class WorkTask {
 
     // Submitted by the creator when marking the task complete (Module 3)
     private String        submissionNotes;
-    private String        assetUrl;
 
     /**
      * Comment left by the worker when they self-hold the task (e.g. a blocker

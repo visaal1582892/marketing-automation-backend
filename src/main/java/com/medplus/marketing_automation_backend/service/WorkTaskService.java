@@ -6,6 +6,7 @@ import com.medplus.marketing_automation_backend.enums.CampaignStatus;
 import com.medplus.marketing_automation_backend.enums.TaskStatus;
 import com.medplus.marketing_automation_backend.exception.BadRequestException;
 import com.medplus.marketing_automation_backend.exception.ResourceNotFoundException;
+import com.medplus.marketing_automation_backend.repository.AssetInfoRepository;
 import com.medplus.marketing_automation_backend.repository.WorkTaskRepository;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -19,9 +20,12 @@ import java.util.stream.Collectors;
 public class WorkTaskService {
 
     private final WorkTaskRepository workTaskRepo;
+    private final AssetInfoRepository assetInfoRepo;
 
-    public WorkTaskService(WorkTaskRepository workTaskRepo) {
-        this.workTaskRepo = workTaskRepo;
+    public WorkTaskService(WorkTaskRepository workTaskRepo,
+                           AssetInfoRepository assetInfoRepo) {
+        this.workTaskRepo  = workTaskRepo;
+        this.assetInfoRepo = assetInfoRepo;
     }
 
     // -------------------------------------------------------------------------
@@ -75,7 +79,7 @@ public class WorkTaskService {
      */
     @Transactional
     public WorkTaskResponse complete(String taskId, int userId,
-                                     String submissionNotes, String assetUrl) {
+                                     String submissionNotes, java.util.List<String> assetUrls) {
         WorkTask task = findAndAuthorize(taskId, userId);
 
         if (task.getStatus() != TaskStatus.IN_PROGRESS) {
@@ -99,10 +103,13 @@ public class WorkTaskService {
         int previous = task.getTotalTimeLoggedMinutes() == null ? 0 : task.getTotalTimeLoggedMinutes();
         int totalMinutes = previous + Math.max(0, minutes);
 
-        int updated = workTaskRepo.complete(taskId, userId, now, totalMinutes,
-                trim(submissionNotes), trim(assetUrl));
+        int updated = workTaskRepo.complete(taskId, userId, now, totalMinutes, trim(submissionNotes));
         if (updated == 0) {
             throw new BadRequestException("Unable to complete task — please refresh and try again.");
+        }
+        // Persist uploaded asset URLs to the asset_info table
+        if (assetUrls != null && !assetUrls.isEmpty()) {
+            assetInfoRepo.insertAll(taskId, userId, assetUrls);
         }
         return CampaignService.toWorkTaskResponse(
                 workTaskRepo.findById(taskId).orElseThrow());

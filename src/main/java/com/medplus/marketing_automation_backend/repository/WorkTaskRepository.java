@@ -32,7 +32,7 @@ public class WorkTaskRepository {
                    wt.assigned_at, wt.accepted_at, wt.started_at,
                    wt.submitted_at, wt.completed_at,
                    wt.total_time_logged_minutes, wt.dynamic_deadline,
-                   wt.submission_notes, wt.asset_url, wt.worker_comment,
+                   wt.submission_notes, wt.worker_comment,
                    wt.created_at, wt.updated_at,
                    u.full_name    AS assignee_name,
                    gt.task_name  AS granular_task_name,
@@ -134,24 +134,22 @@ public class WorkTaskRepository {
      * `completed_at` is reserved for the QC manager's approval timestamp).
      */
     public int complete(String taskId, int userId, LocalDateTime submittedAt, int minutesSpent,
-                        String submissionNotes, String assetUrl) {
+                        String submissionNotes) {
         return jdbc.update("""
                 UPDATE work_tasks
                 SET status = 'QC_REVIEW',
                     submitted_at = :submittedAt,
                     total_time_logged_minutes = :minutes,
-                    submission_notes = :notes,
-                    asset_url        = :assetUrl
+                    submission_notes = :notes
                 WHERE task_id = :id
                   AND assigned_to = :userId
                   AND status = 'IN_PROGRESS'
                 """,
                 new MapSqlParameterSource("submittedAt", Timestamp.valueOf(submittedAt))
-                        .addValue("minutes",  minutesSpent)
-                        .addValue("notes",    submissionNotes)
-                        .addValue("assetUrl", assetUrl)
-                        .addValue("id",       taskId)
-                        .addValue("userId",   userId));
+                        .addValue("minutes", minutesSpent)
+                        .addValue("notes",   submissionNotes)
+                        .addValue("id",      taskId)
+                        .addValue("userId",  userId));
     }
 
     /** Marks the task as fully COMPLETED (QC manager approved). Stamps completed_at = now. */
@@ -778,7 +776,6 @@ public class WorkTaskRepository {
                 .totalTimeLoggedMinutes(getNullableInt(rs, "total_time_logged_minutes"))
                 .dynamicDeadline(toLocalDateTime(rs, "dynamic_deadline"))
                 .submissionNotes(rs.getString("submission_notes"))
-                .assetUrl(rs.getString("asset_url"))
                 .workerComment(rs.getString("worker_comment"))
                 .createdAt(toLocalDateTime(rs, "created_at"))
                 .updatedAt(toLocalDateTime(rs, "updated_at"))

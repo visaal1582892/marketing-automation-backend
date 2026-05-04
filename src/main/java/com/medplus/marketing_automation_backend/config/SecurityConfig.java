@@ -116,6 +116,10 @@ public class SecurityConfig {
                         .requestMatchers(org.springframework.http.HttpMethod.OPTIONS, "/**").permitAll()
                         .requestMatchers("/api/auth/**").permitAll()
                         .requestMatchers("/error", "/actuator/health").permitAll()
+                        // Locally stored uploads (docs, videos, PDFs) — public so browser links work
+                        .requestMatchers("/api/upload/files/**").permitAll()
+                        // WebSocket handshake — auth is handled at STOMP level by JwtChannelInterceptor
+                        .requestMatchers("/ws/**").permitAll()
                         // Master data reads are open to any authenticated user (form dropdowns)
                         .requestMatchers(org.springframework.http.HttpMethod.GET,  "/api/master/**").authenticated()
                         // Master data writes — Admin and Marketing Manager can manage lookup tables
@@ -128,7 +132,8 @@ public class SecurityConfig {
                         // Everything else under /api/admin/** is Admin-only
                         .requestMatchers("/api/admin/**").hasRole("ADMIN")
                         .requestMatchers("/api/manager/**").hasAnyRole("ADMIN", "MARKETING_MANAGER")
-                        .requestMatchers("/api/campaigns/**", "/api/tasks/**", "/api/enums/**").authenticated()
+                        .requestMatchers("/api/campaigns/**", "/api/tasks/**",
+                                         "/api/collaborations/**", "/api/enums/**").authenticated()
                         .anyRequest().authenticated())
                 .exceptionHandling(eh -> eh
                         .authenticationEntryPoint((req, res, ex) -> {

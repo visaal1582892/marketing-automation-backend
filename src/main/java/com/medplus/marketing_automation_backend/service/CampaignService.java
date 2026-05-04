@@ -811,7 +811,6 @@ public class CampaignService {
                 .totalTimeLoggedMinutes(wt.getTotalTimeLoggedMinutes())
                 .dynamicDeadline(wt.getDynamicDeadline())
                 .submissionNotes(wt.getSubmissionNotes())
-                .assetUrl(wt.getAssetUrl())
                 .workerComment(wt.getWorkerComment())
                 .createdAt(wt.getCreatedAt())
                 .reworkCount(wt.getReworkCount())
