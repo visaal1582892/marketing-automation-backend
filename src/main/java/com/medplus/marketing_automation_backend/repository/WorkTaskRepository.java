@@ -32,7 +32,7 @@ public class WorkTaskRepository {
                    wt.assigned_at, wt.accepted_at, wt.started_at,
                    wt.submitted_at, wt.completed_at,
                    wt.total_time_logged_minutes, wt.dynamic_deadline,
-                   wt.submission_notes, wt.worker_comment,
+                   wt.submission_notes,
                    wt.created_at, wt.updated_at,
                    u.full_name    AS assignee_name,
                    gt.task_name  AS granular_task_name,
@@ -243,43 +243,38 @@ public class WorkTaskRepository {
     }
 
     /**
-     * Saves a worker comment and flips the task to HELD.
-     * Allowed from ASSIGNED, IN_PROGRESS, or REWORK — the worker is pausing their
-     * own task to flag a blocker or ask a question to the requestor.
-     * pre_hold_status captures the current status so unhold can restore it exactly.
+     * Flips the task to HELD and captures the pre-hold status so it can be
+     * restored exactly on unhold. Worker comments are now stored in the
+     * separate worker_comments table (see WorkerCommentRepository).
+     * Allowed from ASSIGNED, IN_PROGRESS, or REWORK.
      */
-    public int saveWorkerComment(String taskId, int userId, String comment) {
+    public int holdTask(String taskId, int userId) {
         return jdbc.update("""
                 UPDATE work_tasks
-                   SET worker_comment  = :comment,
-                       pre_hold_status = status,
+                   SET pre_hold_status = status,
                        status          = 'HELD'
                  WHERE task_id     = :id
                    AND assigned_to = :uid
                    AND status IN ('ASSIGNED','IN_PROGRESS','REWORK')
                 """,
-                new MapSqlParameterSource("id",      taskId)
-                        .addValue("uid",     userId)
-                        .addValue("comment", comment));
+                new MapSqlParameterSource("id",  taskId)
+                        .addValue("uid", userId));
     }
 
     /**
-     * Clears the worker comment and resumes the task, restoring the status it
-     * had before being held (captured in pre_hold_status). Falls back to ASSIGNED
-     * if pre_hold_status is NULL for any reason.
-     * Called when the worker decides to resume work (their question was answered).
+     * Resumes a HELD task, restoring the status it had before being held
+     * (captured in pre_hold_status). Falls back to ASSIGNED if NULL.
+     * Called by the worker when they decide to resume work.
      */
-    public int clearWorkerComment(String taskId, int userId) {
+    public int clearHold(String taskId, int userId) {
         return jdbc.update("""
                 UPDATE work_tasks
-                   SET worker_comment  = NULL,
-                       status          = COALESCE(pre_hold_status, 'ASSIGNED'),
+                   SET status          = COALESCE(pre_hold_status, 'ASSIGNED'),
                        pre_hold_status = NULL,
                        assigned_at     = :now
                  WHERE task_id     = :id
                    AND assigned_to = :uid
                    AND status      = 'HELD'
-                   AND worker_comment IS NOT NULL
                 """,
                 new MapSqlParameterSource("id",  taskId)
                         .addValue("uid", userId)
@@ -287,23 +282,52 @@ public class WorkTaskRepository {
     }
 
     /**
-     * Clears the worker comment and resumes a HELD task, restoring the pre-hold
-     * status — called by the requestor path when they save updated answers,
-     * acknowledging the comment. No userId guard needed (caller is the requestor).
+     * Resumes a HELD task by task ID only — called when the requestor saves
+     * updated answers, implicitly acknowledging the worker's comment.
+     * No userId guard (caller is the requestor, not the worker).
      */
-    public int clearWorkerCommentByTaskId(String taskId) {
+    public int clearHoldByTaskId(String taskId) {
         return jdbc.update("""
                 UPDATE work_tasks
-                   SET worker_comment  = NULL,
-                       status          = COALESCE(pre_hold_status, 'ASSIGNED'),
+                   SET status          = COALESCE(pre_hold_status, 'ASSIGNED'),
                        pre_hold_status = NULL,
                        assigned_at     = :now
-                 WHERE task_id        = :id
-                   AND status         = 'HELD'
-                   AND worker_comment IS NOT NULL
+                 WHERE task_id = :id
+                   AND status  = 'HELD'
                 """,
                 new MapSqlParameterSource("id",  taskId)
                         .addValue("now", Timestamp.valueOf(LocalDateTime.now())));
+    }
+
+    /**
+     * Holds a task for collaboration — works from any active status
+     * (ASSIGNED, ACCEPTED, IN_PROGRESS, REWORK, QC_REVIEW).
+     * Saves the current status in pre_hold_status so it can be restored on resume.
+     */
+    public int holdForCollaboration(String taskId) {
+        return jdbc.update("""
+                UPDATE work_tasks
+                   SET pre_hold_status = status,
+                       status          = 'HELD'
+                 WHERE task_id = :id
+                   AND status NOT IN ('HELD','COMPLETED','CANCELLED')
+                """,
+                new MapSqlParameterSource("id", taskId));
+    }
+
+    /**
+     * Resumes a collaboration-held task, restoring it to its pre-hold status.
+     * Falls back to IN_PROGRESS if pre_hold_status is NULL.
+     */
+    public int resumeFromCollaboration(String taskId) {
+        return jdbc.update("""
+                UPDATE work_tasks
+                   SET status          = COALESCE(pre_hold_status, 'IN_PROGRESS'),
+                       pre_hold_status = NULL
+                 WHERE task_id = :id
+                   AND status  = 'HELD'
+                """,
+                new MapSqlParameterSource("id", taskId));
     }
 
     /**
@@ -776,7 +800,6 @@ public class WorkTaskRepository {
                 .totalTimeLoggedMinutes(getNullableInt(rs, "total_time_logged_minutes"))
                 .dynamicDeadline(toLocalDateTime(rs, "dynamic_deadline"))
                 .submissionNotes(rs.getString("submission_notes"))
-                .workerComment(rs.getString("worker_comment"))
                 .createdAt(toLocalDateTime(rs, "created_at"))
                 .updatedAt(toLocalDateTime(rs, "updated_at"))
                 .reworkCount(getNullableInt(rs, "rework_count"))

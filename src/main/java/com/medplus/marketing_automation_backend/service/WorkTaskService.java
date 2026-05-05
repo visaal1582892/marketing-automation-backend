@@ -6,8 +6,8 @@ import com.medplus.marketing_automation_backend.enums.CampaignStatus;
 import com.medplus.marketing_automation_backend.enums.TaskStatus;
 import com.medplus.marketing_automation_backend.exception.BadRequestException;
 import com.medplus.marketing_automation_backend.exception.ResourceNotFoundException;
-import com.medplus.marketing_automation_backend.repository.AssetInfoRepository;
 import com.medplus.marketing_automation_backend.repository.WorkTaskRepository;
+import com.medplus.marketing_automation_backend.repository.WorkerCommentRepository;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -16,32 +16,39 @@ import java.time.LocalDateTime;
 import java.util.List;
 import java.util.stream.Collectors;
 
+
+
 @Service
 public class WorkTaskService {
 
-    private final WorkTaskRepository workTaskRepo;
-    private final AssetInfoRepository assetInfoRepo;
+    private final WorkTaskRepository    workTaskRepo;
+    private final WorkerCommentRepository workerCommentRepo;
 
     public WorkTaskService(WorkTaskRepository workTaskRepo,
-                           AssetInfoRepository assetInfoRepo) {
-        this.workTaskRepo  = workTaskRepo;
-        this.assetInfoRepo = assetInfoRepo;
+                           WorkerCommentRepository workerCommentRepo) {
+        this.workTaskRepo      = workTaskRepo;
+        this.workerCommentRepo = workerCommentRepo;
     }
 
     // -------------------------------------------------------------------------
     // Employee-facing
     // -------------------------------------------------------------------------
 
-    /** Returns all tasks assigned to the given user. */
+    /** Returns all tasks assigned to the given user, enriched with active comments. */
     public List<WorkTaskResponse> listMy(int userId) {
         return workTaskRepo.findByAssignedTo(userId).stream()
-                .map(CampaignService::toWorkTaskResponse)
+                .map(t -> enrichWithComments(CampaignService.toWorkTaskResponse(t), t.getTaskId()))
                 .collect(Collectors.toList());
     }
 
     public WorkTaskResponse get(String taskId, int userId) {
         WorkTask task = findAndAuthorize(taskId, userId);
-        return CampaignService.toWorkTaskResponse(task);
+        return enrichWithComments(CampaignService.toWorkTaskResponse(task), taskId);
+    }
+
+    private WorkTaskResponse enrichWithComments(WorkTaskResponse r, String taskId) {
+        r.setActiveComments(workerCommentRepo.findActiveByTaskId(taskId));
+        return r;
     }
 
     /**
@@ -80,6 +87,8 @@ public class WorkTaskService {
     @Transactional
     public WorkTaskResponse complete(String taskId, int userId,
                                      String submissionNotes, java.util.List<String> assetUrls) {
+        // assetUrls is intentionally ignored — assets are now managed exclusively
+        // via the collaboration panel (asset_info table, not work_tasks)
         WorkTask task = findAndAuthorize(taskId, userId);
 
         if (task.getStatus() != TaskStatus.IN_PROGRESS) {
@@ -107,10 +116,6 @@ public class WorkTaskService {
         if (updated == 0) {
             throw new BadRequestException("Unable to complete task — please refresh and try again.");
         }
-        // Persist uploaded asset URLs to the asset_info table
-        if (assetUrls != null && !assetUrls.isEmpty()) {
-            assetInfoRepo.insertAll(taskId, userId, assetUrls);
-        }
         return CampaignService.toWorkTaskResponse(
                 workTaskRepo.findById(taskId).orElseThrow());
     }
@@ -126,7 +131,9 @@ public class WorkTaskService {
         if (comment == null || comment.isBlank()) {
             throw new BadRequestException("Comment must not be blank.");
         }
-        int updated = workTaskRepo.saveWorkerComment(taskId, userId, trim(comment));
+        // First insert the comment, then flip the task to HELD
+        workerCommentRepo.insert(taskId, userId, trim(comment));
+        int updated = workTaskRepo.holdTask(taskId, userId);
         if (updated == 0) {
             throw new BadRequestException(
                     "Task cannot be held at its current status. Only ASSIGNED, IN_PROGRESS, or REWORK tasks can be held.");
@@ -136,19 +143,26 @@ public class WorkTaskService {
     }
 
     /**
-     * Worker clears their comment and resumes the task (status → ASSIGNED).
-     * Only works when the task was self-held by the worker (worker_comment IS NOT NULL).
+     * Worker resumes the task — marks all active comments answered and restores
+     * the task to its pre-hold status.
      */
     @Transactional
     public WorkTaskResponse workerUnhold(String taskId, int userId) {
         findAndAuthorize(taskId, userId);
-        int updated = workTaskRepo.clearWorkerComment(taskId, userId);
+        workerCommentRepo.markAllAnswered(taskId);
+        int updated = workTaskRepo.clearHold(taskId, userId);
         if (updated == 0) {
             throw new BadRequestException(
                     "Task is not self-held or you are not the assigned worker.");
         }
         return CampaignService.toWorkTaskResponse(
                 workTaskRepo.findById(taskId).orElseThrow());
+    }
+
+    /** Mark a single worker comment as answered. Any participant can do this. */
+    @Transactional
+    public void markCommentAnswered(String taskId, int commentId) {
+        workerCommentRepo.markAnswered(commentId);
     }
 
     private static String trim(String s) {

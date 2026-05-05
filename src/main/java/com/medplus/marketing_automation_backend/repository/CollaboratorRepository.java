@@ -78,7 +78,7 @@ public class CollaboratorRepository {
                        wt.assigned_at, wt.accepted_at, wt.started_at,
                        wt.submitted_at, wt.completed_at,
                        wt.total_time_logged_minutes, wt.dynamic_deadline,
-                       wt.submission_notes, wt.worker_comment,
+                       wt.submission_notes,
                        wt.created_at, wt.updated_at,
                        u.full_name    AS assignee_name,
                        gt.task_name  AS granular_task_name,
@@ -86,6 +86,7 @@ public class CollaboratorRepository {
                        c.deadline    AS campaign_deadline,
                        c.priority    AS campaign_priority,
                        c.status      AS campaign_status,
+                       c.requestor_id AS requestor_id,
                        rt.requirement_name,
                        req.full_name AS requestor_name,
                        (SELECT COUNT(*) FROM approvals_log al
@@ -129,7 +130,7 @@ public class CollaboratorRepository {
                        wt.assigned_at, wt.accepted_at, wt.started_at,
                        wt.submitted_at, wt.completed_at,
                        wt.total_time_logged_minutes, wt.dynamic_deadline,
-                       wt.submission_notes, wt.worker_comment,
+                       wt.submission_notes,
                        wt.created_at, wt.updated_at,
                        u.full_name    AS assignee_name,
                        gt.task_name  AS granular_task_name,
@@ -137,6 +138,7 @@ public class CollaboratorRepository {
                        c.deadline    AS campaign_deadline,
                        c.priority    AS campaign_priority,
                        c.status      AS campaign_status,
+                       c.requestor_id AS requestor_id,
                        rt.requirement_name,
                        req.full_name AS requestor_name,
                        (SELECT COUNT(*) FROM approvals_log al
@@ -164,6 +166,7 @@ public class CollaboratorRepository {
                 WHERE tc.user_id = :userId
                 ORDER BY wt.assigned_at DESC
                 """;
+
         return jdbc.query(sql, Map.of("userId", userId), CollaboratorRepository::mapWorkTask);
     }
 
@@ -183,11 +186,122 @@ public class CollaboratorRepository {
                 .build();
     }
 
+    /** Add a single collaborator (idempotent — uses INSERT IGNORE). */
+    public void addSingleCollaborator(String taskId, int userId) {
+        jdbc.update("""
+                INSERT IGNORE INTO task_collaborators (task_id, user_id)
+                VALUES (:taskId, :userId)
+                """,
+                new MapSqlParameterSource("taskId", taskId).addValue("userId", userId));
+    }
+
+    /**
+     * Returns all work tasks that have at least one collaborator and are in an
+     * open-chat status (IN_PROGRESS or REWORK). Used for the admin view which
+     * shows every active collaboration.
+     */
+    public List<WorkTask> findAllTasksWithOpenChat() {
+        String sql = """
+                SELECT wt.task_id, wt.campaign_id, wt.assigned_to,
+                       wt.granular_task_id, wt.status,
+                       wt.assigned_at, wt.accepted_at, wt.started_at,
+                       wt.submitted_at, wt.completed_at,
+                       wt.total_time_logged_minutes, wt.dynamic_deadline,
+                       wt.submission_notes,
+                       wt.created_at, wt.updated_at,
+                       u.full_name    AS assignee_name,
+                       gt.task_name  AS granular_task_name,
+                       tt.task_name  AS task_type_name,
+                       c.deadline    AS campaign_deadline,
+                       c.priority    AS campaign_priority,
+                       c.status      AS campaign_status,
+                       c.requestor_id AS requestor_id,
+                       rt.requirement_name,
+                       req.full_name AS requestor_name,
+                       (SELECT COUNT(*) FROM approvals_log al
+                         WHERE al.task_id = wt.task_id
+                           AND al.action_taken = 'NEEDS_REWORK') AS rework_count,
+                       (SELECT COUNT(*) FROM approvals_log al
+                         WHERE al.task_id = wt.task_id
+                           AND al.action_taken = 'REQUESTOR_REWORK') AS requestor_rework_count,
+                       (SELECT al.comments FROM approvals_log al
+                         WHERE al.task_id = wt.task_id
+                           AND al.action_taken = 'NEEDS_REWORK'
+                         ORDER BY al.created_at DESC LIMIT 1) AS latest_manager_rework_comment,
+                       (SELECT al.comments FROM approvals_log al
+                         WHERE al.task_id = wt.task_id
+                           AND al.action_taken = 'REQUESTOR_REWORK'
+                         ORDER BY al.created_at DESC LIMIT 1) AS latest_requestor_rework_comment
+                FROM work_tasks wt
+                LEFT JOIN users             u   ON u.user_id              = wt.assigned_to
+                LEFT JOIN granular_tasks    gt  ON gt.task_id             = wt.granular_task_id
+                LEFT JOIN task_types        tt  ON tt.task_type_id        = gt.task_type_id
+                LEFT JOIN campaigns         c   ON c.campaign_id          = wt.campaign_id
+                LEFT JOIN requirement_types rt  ON rt.requirement_type_id = c.requirement_type_id
+                LEFT JOIN users             req ON req.user_id            = c.requestor_id
+                WHERE wt.status IN ('IN_PROGRESS','REWORK')
+                  AND EXISTS (SELECT 1 FROM task_collaborators tc WHERE tc.task_id = wt.task_id)
+                ORDER BY wt.assigned_at DESC
+                """;
+        return jdbc.query(sql, new MapSqlParameterSource(), CollaboratorRepository::mapWorkTask);
+    }
+
+    /**
+     * All tasks that have at least one collaborator — used by Marketing Managers
+     * who can see and participate in every collaboration regardless of status.
+     */
+    public List<WorkTask> findAllTasksWithAnyCollaborator() {
+        String sql = """
+                SELECT wt.task_id, wt.campaign_id, wt.assigned_to,
+                       wt.granular_task_id, wt.status,
+                       wt.assigned_at, wt.accepted_at, wt.started_at,
+                       wt.submitted_at, wt.completed_at,
+                       wt.total_time_logged_minutes, wt.dynamic_deadline,
+                       wt.submission_notes,
+                       wt.created_at, wt.updated_at,
+                       u.full_name    AS assignee_name,
+                       gt.task_name  AS granular_task_name,
+                       tt.task_name  AS task_type_name,
+                       c.deadline    AS campaign_deadline,
+                       c.priority    AS campaign_priority,
+                       c.status      AS campaign_status,
+                       c.requestor_id AS requestor_id,
+                       rt.requirement_name,
+                       req.full_name AS requestor_name,
+                       (SELECT COUNT(*) FROM approvals_log al
+                         WHERE al.task_id = wt.task_id
+                           AND al.action_taken = 'NEEDS_REWORK') AS rework_count,
+                       (SELECT COUNT(*) FROM approvals_log al
+                         WHERE al.task_id = wt.task_id
+                           AND al.action_taken = 'REQUESTOR_REWORK') AS requestor_rework_count,
+                       (SELECT al.comments FROM approvals_log al
+                         WHERE al.task_id = wt.task_id
+                           AND al.action_taken = 'NEEDS_REWORK'
+                         ORDER BY al.created_at DESC LIMIT 1) AS latest_manager_rework_comment,
+                       (SELECT al.comments FROM approvals_log al
+                         WHERE al.task_id = wt.task_id
+                           AND al.action_taken = 'REQUESTOR_REWORK'
+                         ORDER BY al.created_at DESC LIMIT 1) AS latest_requestor_rework_comment
+                FROM work_tasks wt
+                LEFT JOIN users             u   ON u.user_id              = wt.assigned_to
+                LEFT JOIN granular_tasks    gt  ON gt.task_id             = wt.granular_task_id
+                LEFT JOIN task_types        tt  ON tt.task_type_id        = gt.task_type_id
+                LEFT JOIN campaigns         c   ON c.campaign_id          = wt.campaign_id
+                LEFT JOIN requirement_types rt  ON rt.requirement_type_id = c.requirement_type_id
+                LEFT JOIN users             req ON req.user_id            = c.requestor_id
+                WHERE wt.status NOT IN ('CANCELLED')
+                  AND EXISTS (SELECT 1 FROM task_collaborators tc WHERE tc.task_id = wt.task_id)
+                ORDER BY wt.created_at DESC
+                """;
+        return jdbc.query(sql, new MapSqlParameterSource(), CollaboratorRepository::mapWorkTask);
+    }
+
     private static WorkTask mapWorkTask(ResultSet rs, int rowNum) throws SQLException {
         return WorkTask.builder()
                 .taskId(rs.getString("task_id"))
                 .campaignId(rs.getInt("campaign_id"))
                 .assignedTo(getNullableInt(rs, "assigned_to"))
+                .requestorId(getNullableInt(rs, "requestor_id"))
                 .assigneeName(rs.getString("assignee_name"))
                 .granularTaskId(rs.getString("granular_task_id"))
                 .granularTaskName(rs.getString("granular_task_name"))
@@ -201,7 +315,6 @@ public class CollaboratorRepository {
                 .totalTimeLoggedMinutes(getNullableInt(rs, "total_time_logged_minutes"))
                 .dynamicDeadline(toLocalDateTime(rs, "dynamic_deadline"))
                 .submissionNotes(rs.getString("submission_notes"))
-                .workerComment(rs.getString("worker_comment"))
                 .createdAt(toLocalDateTime(rs, "created_at"))
                 .updatedAt(toLocalDateTime(rs, "updated_at"))
                 .reworkCount(getNullableInt(rs, "rework_count"))

@@ -72,31 +72,100 @@ public class CollaborationService {
     }
 
     /**
-     * Returns all collaboration tasks for this user — either as the task owner
-     * (assigned worker who has at least one collaborator) or as an invited
-     * collaborator. Ordered newest-first. Owner tasks appear first when both
-     * roles apply to the same task.
+     * Returns all collaboration tasks for this user — as owner, requestor,
+     * collaborator, or admin. Ordered newest-first.
      */
     public List<WorkTaskResponse> getMyCollaborations(int userId) {
         Map<String, WorkTaskResponse> merged = new LinkedHashMap<>();
 
-        // Tasks the user owns that have at least one collaborator
+        // Tasks the user owns (assigned worker who has at least one collaborator)
         for (WorkTask t : collaboratorRepo.findOwnedTasksWithCollaborators(userId)) {
             WorkTaskResponse r = CampaignService.toWorkTaskResponse(t);
             r.setMyRole("OWNER");
             merged.put(t.getTaskId(), r);
         }
 
-        // Tasks the user was invited to collaborate on
+        // Tasks the user is a collaborator on (invited or auto-added as requestor)
         for (WorkTask t : collaboratorRepo.findTasksByCollaboratorUserId(userId)) {
             if (!merged.containsKey(t.getTaskId())) {
                 WorkTaskResponse r = CampaignService.toWorkTaskResponse(t);
-                r.setMyRole("COLLABORATOR");
+                // If this user is the campaign requestor, show "REQUESTOR" role
+                String role = t.getRequestorId() != null
+                        && t.getRequestorId().equals(userId) ? "REQUESTOR" : "COLLABORATOR";
+                r.setMyRole(role);
                 merged.put(t.getTaskId(), r);
             }
         }
 
+        // Admins and Marketing Managers see every task with collaborators
+        User caller = userRepo.findById((long) userId).orElse(null);
+        boolean isAdmin = caller != null
+                && caller.getRoleIds() != null
+                && caller.getRoleIds().contains("1");
+        boolean isMarketingManager = caller != null
+                && caller.getRoleNames() != null
+                && caller.getRoleNames().stream().anyMatch(n -> n.equalsIgnoreCase("Marketing Manager"));
+
+        if (isAdmin) {
+            for (WorkTask t : collaboratorRepo.findAllTasksWithOpenChat()) {
+                if (!merged.containsKey(t.getTaskId())) {
+                    WorkTaskResponse r = CampaignService.toWorkTaskResponse(t);
+                    r.setMyRole("ADMIN");
+                    merged.put(t.getTaskId(), r);
+                }
+            }
+        } else if (isMarketingManager) {
+            for (WorkTask t : collaboratorRepo.findAllTasksWithAnyCollaborator()) {
+                if (!merged.containsKey(t.getTaskId())) {
+                    WorkTaskResponse r = CampaignService.toWorkTaskResponse(t);
+                    r.setMyRole("MANAGER");
+                    merged.put(t.getTaskId(), r);
+                }
+            }
+        }
+
         return new ArrayList<>(merged.values());
+    }
+
+    /**
+     * Starts collaboration on a task: ensures the requestor is a collaborator and
+     * holds the task so the worker can focus on the collaboration chat.
+     * Can be called by the task's assigned worker.
+     */
+    @Transactional
+    public void startCollaboration(String taskId, int callerUserId) {
+        WorkTask task = workTaskRepo.findById(taskId)
+                .orElseThrow(() -> new ResourceNotFoundException("Task not found: " + taskId));
+        if (task.getAssignedTo() == null || task.getAssignedTo() != callerUserId) {
+            throw new BadRequestException("Only the assigned worker can start collaboration.");
+        }
+        // Ensure requestor is a collaborator (auto-add if not already)
+        if (task.getRequestorId() != null && task.getRequestorId() > 0) {
+            collaboratorRepo.addSingleCollaborator(taskId, task.getRequestorId());
+        }
+        // Hold the task
+        workTaskRepo.holdForCollaboration(taskId);
+    }
+
+    /**
+     * Pauses collaboration: restores the task to its pre-hold status so it
+     * re-enters the active work queue at the top.
+     * Can be called by the task's assigned worker.
+     */
+    @Transactional
+    public void pauseCollaboration(String taskId, int callerUserId) {
+        WorkTask task = workTaskRepo.findById(taskId)
+                .orElseThrow(() -> new ResourceNotFoundException("Task not found: " + taskId));
+        // Allow the worker or an admin to pause
+        User caller = userRepo.findById((long) callerUserId).orElse(null);
+        boolean isAdmin = caller != null
+                && caller.getRoleIds() != null
+                && caller.getRoleIds().contains("1");
+        boolean isWorker = task.getAssignedTo() != null && task.getAssignedTo() == callerUserId;
+        if (!isWorker && !isAdmin) {
+            throw new BadRequestException("Only the assigned worker or an admin can pause collaboration.");
+        }
+        workTaskRepo.resumeFromCollaboration(taskId);
     }
 
     /** Returns all active users — used to populate the collaborator picker on the frontend. */
@@ -106,20 +175,29 @@ public class CollaborationService {
 
     // ── Assets ────────────────────────────────────────────────────────────────
 
-    /** Add an asset URL to a task. Caller must be the worker or a collaborator. */
-    public AssetInfo addAsset(String taskId, int callerUserId, String url) {
+    /** Add an asset to a task with its thumbnail and original filename. Caller must have access. */
+    public AssetInfo addAsset(String taskId, int callerUserId,
+                              String url, String thumbnailUrl, String originalFilename) {
         assertAccess(taskId, callerUserId);
         if (url == null || url.isBlank()) {
             throw new BadRequestException("Asset URL must not be blank.");
         }
-        assetInfoRepo.insert(taskId, callerUserId, url.trim());
+        assetInfoRepo.insert(taskId, callerUserId, url.trim(), thumbnailUrl, originalFilename);
         return assetInfoRepo.findByTaskId(taskId).stream()
                 .filter(a -> a.getUrl().equals(url.trim()))
                 .reduce((first, second) -> second) // last inserted
                 .orElseThrow();
     }
 
-    /** List all assets for a task. Caller must be the worker or a collaborator. */
+    /** Delete an asset. Only the uploader can delete their own asset. */
+    public void deleteAsset(int assetId, int callerUserId) {
+        int deleted = assetInfoRepo.deleteByIdAndUserId(assetId, callerUserId);
+        if (deleted == 0) {
+            throw new BadRequestException("Asset not found or you are not the uploader.");
+        }
+    }
+
+    /** List all assets for a task. Caller must have access. */
     public List<AssetInfo> getAssets(String taskId, int callerUserId) {
         assertAccess(taskId, callerUserId);
         return assetInfoRepo.findByTaskId(taskId);
@@ -128,9 +206,15 @@ public class CollaborationService {
     // ── Access guard ──────────────────────────────────────────────────────────
 
     /**
-     * Asserts that the caller is either the task's assigned worker or a collaborator.
+     * Asserts that the caller is the task's assigned worker, a collaborator,
+     * or an admin (role_id "1"). Admins bypass all task-level restrictions.
      */
     public void assertAccess(String taskId, int callerUserId) {
+        // Admin bypass
+        User caller = userRepo.findById((long) callerUserId).orElse(null);
+        if (caller != null && caller.getRoleIds() != null && caller.getRoleIds().contains("1")) {
+            return;
+        }
         WorkTask task = workTaskRepo.findById(taskId)
                 .orElseThrow(() -> new ResourceNotFoundException("Task not found: " + taskId));
         boolean isWorker       = task.getAssignedTo() != null && task.getAssignedTo() == callerUserId;

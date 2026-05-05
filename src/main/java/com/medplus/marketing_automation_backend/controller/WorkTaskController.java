@@ -5,6 +5,7 @@ import com.medplus.marketing_automation_backend.dto.WorkTaskResponse;
 import com.medplus.marketing_automation_backend.security.CustomUserDetails;
 import com.medplus.marketing_automation_backend.service.WorkTaskService;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
+import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
@@ -74,12 +75,23 @@ public class WorkTaskController {
     }
 
     /**
-     * Worker clears their comment and resumes the task (status → ASSIGNED).
+     * Worker resumes the task after self-hold — marks all active comments answered.
      */
     @PatchMapping("/{id}/worker-unhold")
     public WorkTaskResponse workerUnhold(@PathVariable String id,
                                          @AuthenticationPrincipal CustomUserDetails principal) {
         return workTaskService.workerUnhold(id, principal.getUser().getUserId().intValue());
+    }
+
+    /**
+     * Mark a single worker comment as answered (hides it from the task card).
+     * Can be called by the assigned worker.
+     */
+    @PatchMapping("/{id}/comments/{commentId}/answer")
+    public void markCommentAnswered(@PathVariable String id,
+                                    @PathVariable int commentId,
+                                    @AuthenticationPrincipal CustomUserDetails principal) {
+        workTaskService.markCommentAnswered(id, commentId);
     }
 
     /** Returns a flat list of asset URLs from the request body. */

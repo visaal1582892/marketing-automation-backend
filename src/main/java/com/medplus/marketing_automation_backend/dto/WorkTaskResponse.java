@@ -1,5 +1,6 @@
 package com.medplus.marketing_automation_backend.dto;
 
+import com.medplus.marketing_automation_backend.domain.WorkerComment;
 import lombok.*;
 
 import java.time.LocalDate;
@@ -21,6 +22,7 @@ public class WorkTaskResponse {
     private String        granularTaskName;
     private String        taskTypeName;
     private Integer       assignedTo;
+    private Integer       requestorId;
     private String        assigneeName;
     private String        status;
     private LocalDate     campaignDeadline;
@@ -42,10 +44,11 @@ public class WorkTaskResponse {
     private String        submissionNotes;
 
     /**
-     * Comment left by the worker when they self-hold the task.
-     * Visible to the requestor so they can take action.
+     * Active (unanswered) worker comments on this task.
+     * Replaces the old single workerComment column — now a proper list.
      */
-    private String        workerComment;
+    private List<WorkerComment> activeComments;
+
     private LocalDateTime createdAt;
 
     /**
@@ -79,6 +82,8 @@ public class WorkTaskResponse {
      * Role of the requesting user relative to this task in a collaboration context.
      * "OWNER" = the assigned worker who invited collaborators.
      * "COLLABORATOR" = a user who was invited to collaborate.
+     * "REQUESTOR" = the campaign requestor (auto-added as collaborator).
+     * "ADMIN" = admin user who can see all open collaborations.
      * Null when not used in a collaboration response.
      */
     private String myRole;

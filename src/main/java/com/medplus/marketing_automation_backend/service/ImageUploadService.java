@@ -1,5 +1,6 @@
 package com.medplus.marketing_automation_backend.service;
 
+import com.medplus.marketing_automation_backend.exception.UnsupportedFileFormatException;
 import org.springframework.core.io.ByteArrayResource;
 import org.springframework.http.*;
 import org.springframework.http.client.SimpleClientHttpRequestFactory;
@@ -21,9 +22,10 @@ import java.util.Map;
  * Handles asset uploads to the company image server via a three-step flow:
  *  1. Obtain a short-lived OAuth token (client-credentials grant).
  *  2. Fetch image-server URL + upload token from the transit API.
- *  3. POST each file as multipart/form-data and collect the resulting paths.
+ *  3. POST each file as multipart/form-data and collect the resulting metadata.
  *
- * The full public URL for each asset is:  imageServerUrl + "/" + imagePath
+ * All file types (images, documents, videos, etc.) go through this service.
+ * No files are stored locally.
  */
 @Service
 public class ImageUploadService {
@@ -49,23 +51,34 @@ public class ImageUploadService {
         this.restTemplate = buildRestTemplate();
     }
 
+    // ── Result DTO ─────────────────────────────────────────────────────────────
+
+    /**
+     * Holds all metadata returned by the image server for a single uploaded file.
+     *
+     * @param url               Full public URL of the uploaded file  (imageServerUrl/imagePath)
+     * @param thumbnailUrl      Full public URL of the thumbnail, or null if not provided
+     * @param originalImageName Original filename as reported by the image server
+     */
+    public record UploadResult(String url, String thumbnailUrl, String originalImageName) {}
+
     // ── Public API ─────────────────────────────────────────────────────────────
 
     /**
-     * Uploads every file in the list and returns the full public URL for each one.
-     * Files are processed sequentially; the OAuth + server-details calls are made
-     * once per batch (not once per file) to avoid unnecessary round-trips.
+     * Uploads every file in the list to the external image server and returns
+     * rich metadata for each one.  The OAuth + server-details calls are made
+     * once per batch to avoid unnecessary round-trips.
+     * Accepts all file types — images, documents, videos, etc.
      */
-    public List<String> uploadFiles(List<MultipartFile> files) {
-        String oauthToken           = fetchOAuthToken();
-        ImageServerDetails details  = fetchImageServerDetails(oauthToken);
+    public List<UploadResult> uploadFiles(List<MultipartFile> files) {
+        String oauthToken          = fetchOAuthToken();
+        ImageServerDetails details = fetchImageServerDetails(oauthToken);
 
-        List<String> urls = new ArrayList<>();
+        List<UploadResult> results = new ArrayList<>();
         for (MultipartFile file : files) {
-            String imagePath = uploadSingleFile(file, details);
-            urls.add(details.imageServerUrl + "/" + imagePath);
+            results.add(uploadSingleFile(file, details));
         }
-        return urls;
+        return results;
     }
 
     // ── Step 1 ─────────────────────────────────────────────────────────────────
@@ -124,7 +137,7 @@ public class ImageUploadService {
     // ── Step 3 ─────────────────────────────────────────────────────────────────
 
     @SuppressWarnings("unchecked")
-    private String uploadSingleFile(MultipartFile file, ImageServerDetails details) {
+    private UploadResult uploadSingleFile(MultipartFile file, ImageServerDetails details) {
         String uploadUrl = details.imageServerUrl + "/upload"
                 + "?token="      + details.uploadToken
                 + "&clientId="   + details.clientId
@@ -145,16 +158,35 @@ public class ImageUploadService {
             throw new RuntimeException("Could not read uploaded file '" + file.getOriginalFilename() + "': " + e.getMessage(), e);
         }
 
-        ResponseEntity<Map<String, Object>> response = restTemplate.exchange(
-                uploadUrl, HttpMethod.POST, new HttpEntity<>(body, headers), responseType());
+        ResponseEntity<Map<String, Object>> response;
+        try {
+            response = restTemplate.exchange(
+                    uploadUrl, HttpMethod.POST, new HttpEntity<>(body, headers), responseType());
+        } catch (org.springframework.web.client.HttpClientErrorException ex) {
+            throw new UnsupportedFileFormatException(
+                    "File '" + file.getOriginalFilename() + "' was rejected by the image server: "
+                    + ex.getStatusCode() + ". Only images, videos and PDFs are supported.");
+        }
 
         Map<String, Object> responseBody = response.getBody();
         if (responseBody == null) {
             throw new RuntimeException("Empty response from image-server upload");
         }
 
+        // Check for explicit error status from image server (e.g. { "statusCode": "UNSUPPORTED_FORMAT", ... })
+        Object statusCode = responseBody.get("statusCode");
+        if (statusCode instanceof String s && !s.equalsIgnoreCase("SUCCESS") && !s.equalsIgnoreCase("200")) {
+            String errorMsg = responseBody.containsKey("message") ? (String) responseBody.get("message") : s;
+            if (s.toUpperCase().contains("UNSUPPORTED") || s.toUpperCase().contains("FORMAT")) {
+                throw new UnsupportedFileFormatException(
+                        "File format not supported: '" + file.getOriginalFilename()
+                        + "'. Only images, videos and PDFs are accepted.");
+            }
+            throw new RuntimeException("Image server error for '" + file.getOriginalFilename() + "': " + errorMsg);
+        }
+
         // The API wraps the result in a nested "response" array:
-        // { "statusCode": "SUCCESS", "response": [{ "imagePath": "...", ... }] }
+        // { "statusCode": "SUCCESS", "response": [{ "imagePath": "...", "thumbnailPath": "...", "originalImageName": "..." }] }
         Object responseValue = responseBody.get("response");
         Map<String, Object> fileResult;
         if (responseValue instanceof java.util.List<?> list && !list.isEmpty()) {
@@ -162,15 +194,22 @@ public class ImageUploadService {
         } else if (responseValue instanceof Map) {
             fileResult = (Map<String, Object>) responseValue;
         } else {
-            // Fallback: maybe imagePath is at the top level
             fileResult = responseBody;
         }
 
-        String imagePath = (String) fileResult.get("imagePath");
+        String imagePath         = (String) fileResult.get("imagePath");
+        String thumbnailPath     = (String) fileResult.get("thumbnailPath");
+        String originalImageName = (String) fileResult.get("originalImageName");
+
         if (imagePath == null) {
             throw new RuntimeException("Unexpected response from image-server upload: " + responseBody);
         }
-        return imagePath;
+
+        String fullUrl      = details.imageServerUrl + "/" + imagePath;
+        String thumbnailUrl = thumbnailPath != null ? details.imageServerUrl + "/" + thumbnailPath : null;
+        String origName     = originalImageName != null ? originalImageName : file.getOriginalFilename();
+
+        return new UploadResult(fullUrl, thumbnailUrl, origName);
     }
 
     /** Type token helper — avoids raw-Map warnings on exchange() calls. */

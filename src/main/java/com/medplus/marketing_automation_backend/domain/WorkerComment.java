@@ -8,13 +8,12 @@ import java.time.LocalDateTime;
 @Builder
 @NoArgsConstructor
 @AllArgsConstructor
-public class AssetInfo {
-    private Integer       assetId;
+public class WorkerComment {
+    private Integer       commentId;
     private String        taskId;
     private Integer       userId;
     private String        userName;
-    private String        url;
-    private String        thumbnailUrl;
-    private String        originalFilename;
+    private String        comment;
+    private boolean       answered;
     private LocalDateTime createdAt;
 }

@@ -179,11 +179,11 @@ public class QuestionnaireService {
             answerRepo.save(answer);
         }
 
-        // If the task was on hold due to a worker comment, the requestor saving
-        // answers means they have addressed the concern — clear the comment and
+        // If the task is on hold, the requestor saving answers means they have
+        // addressed the worker's concern — mark all active comments answered and
         // resume the task automatically.
-        if (task.getStatus() == TaskStatus.HELD && task.getWorkerComment() != null) {
-            int updated = workTaskRepo.clearWorkerCommentByTaskId(workTaskId);
+        if (task.getStatus() == TaskStatus.HELD) {
+            int updated = workTaskRepo.clearHoldByTaskId(workTaskId);
             if (updated > 0) {
                 log.info("QUESTIONNAIRE saveAnswers | auto-cleared worker hold on task={}", workTaskId);
             }

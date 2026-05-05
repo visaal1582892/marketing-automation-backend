@@ -332,9 +332,9 @@ INSERT IGNORE INTO dynamic_questions (question_id, question_text, field_type, op
   ('QUES-2',  'Is a print-ready (bleed + crop marks) file needed?',
               'DROPDOWN', '["Yes","No"]', 1),
   ('QUES-3',  'Which colour profile should be used?',
-              'DROPDOWN', '["CMYK (Print)","RGB (Digital)","Both"]', 1),
+              'DROPDOWN', '["CMYK (Print)","RGB (Digital)","CMYK (Print) & RGB (Digital)"]', 1),
   ('QUES-4',  'What file formats should be delivered?',
-              'MULTISELECT', '["PDF","PNG","JPG","SVG","AI","PSD","EPS"]', 1),
+              'MULTISELECT', '["PDF","PNG","JPG","SVG","AI","PSD","EPS","CDN"]', 1),
   ('QUES-5',  'Are brand guidelines / style guide files attached?',
               'DROPDOWN', '["Yes, in the drive link","No, use standard brand kit"]', 0),
   ('QUES-6',  'How many design variants / versions are needed?',
@@ -789,73 +789,54 @@ INSERT IGNORE INTO task_question_mapping (granular_task_id, question_id) VALUES
 
 
 -- user rows inserting
+-- role_id is stored in user_roles junction table, NOT directly on users
 INSERT IGNORE INTO users (
 user_id, full_name, email, password_hash,
-department_id, role_id, designation_id,
+department_id, designation_id,
 skill_level, current_active_tasks, status, created_at
 ) VALUES
+(1,'System Administrator','admin@medplus.com','$2a$10$LyooB.pM8GNRM8D0elI10.plNV63G.pjXklINfbh.VHvGoLzmuaMS',1,1,'SENIOR',0,'ACTIVE','2026-04-29 07:12:00'),
+(2,'Sampath Kumar Thummanapelli','sampathkumart@medplusindia.com','$2a$10$VbSfgf5MqiXVR5hhvht3e.mIg2nQ5RP7pNjuGkuRcJfGIEoqoJ1W2',1,5,'SENIOR',0,'ACTIVE','2026-04-29 07:12:00'),
+(3,'Govardhan Kurva','govardhank@medplusindia.com','$2a$10$UarxD15T7AnfSbL71chhReOzjSd7eW3xQP640KFyf33ckrDjU5G06',1,5,'SENIOR',0,'ACTIVE','2026-04-29 07:12:00'),
+(4,'Raju Kandakatla','rajukandakatla@medplusindia.com','$2a$10$e5Txc/eG3iNUdk4CsqNkBu/6s4MYAuqI3Bn0c.0xNUx4OkeDQ4Yu2',1,5,'JUNIOR',0,'ACTIVE','2026-04-29 07:12:00'),
+(5,'Venkatesh Talari','venkatesht@medplusindia.com','$2a$10$QyllBsUKIg3u7F32iVVe2erM6HpDaVUhKFS/FoZzf5JBmuddrh0LC',1,2,'JUNIOR',0,'ACTIVE','2026-04-29 07:12:00'),
+(6,'Bodhan Kumar Neelam','bodhankumar.n@medplusindia.com','$2a$10$3L2Nj9DhDSXWUl6IoKqrP.f329mGrwwc0A9zascL1AlydoKEIGeFO',1,3,'SENIOR',0,'ACTIVE','2026-04-29 07:12:00'),
+(7,'Aneela Suneetha Sakilay','suneetha.s@medplusindia.com','$2a$10$abRDpiPlHIaOgjBUBn6kHOBbbAiD4hlqIHFx3p4mET8WGRYd/sPMK',1,7,'SENIOR',0,'ACTIVE','2026-04-29 07:12:00'),
+(8,'Suresh Yerrabelli','sureshy@medplusindia.com','$2a$10$IzdvzYd7R0bZ7TqIlwswAODbIVOaPF3wB9vDPQKkt14JvYRTQx7pm',1,6,'SENIOR',0,'ACTIVE','2026-04-29 07:12:00'),
+(9,'Charan reddy L','charanreddy.l@medplusindia.com','$2a$10$bEhfmNwrZ0NPrKiK8EEfAODp0TBGW.6k07nVtNK9Y5A/V7/Qt7Fym',1,8,'JUNIOR',0,'ACTIVE','2026-04-29 07:12:00'),
+(10,'Ganesh Rathod','ganeshr@medplusindia.com','$2a$10$/auWmbVz0tjMH/5ivJkPReFbP.m9GMeSE5kYlXNM0x.MfkPOx.yS6',1,3,'SENIOR',0,'ACTIVE','2026-04-29 07:12:00'),
+(11,'Bhadraiah Paidipelly','bhadraiahp@medplusindia.com','$2a$10$vyQ2na8ZRWEz5E9BI42BmeYhkqfQCdj5YxWmdQYKh6QeAMBu7omfq',1,1,'SENIOR',0,'ACTIVE','2026-04-29 07:12:00'),
+(12,'Suresh Dravidam','suresh.d@medplusindia.com','$2a$10$BmoG3Cv.zUvhBFyS35TaB.0fHSpH8Vw8H9iCihL/a0VZDi3H5eitG',1,6,'SENIOR',0,'ACTIVE','2026-04-29 07:12:00'),
+(13,'Veer Raju Pydimalla','veerarajup@medplusindia.com','$2a$10$8hQUZJkgYbqdNcjzaSWTe.QHaLn47mK2f8oM6j8NPPCvMygLHw8uG',1,4,'JUNIOR',0,'ACTIVE','2026-04-29 07:12:00'),
+(14,'Prabhu Kumar Paradesi','prabhukumar.p@medplusindia.com','$2a$10$hXF4yqvniKED2mfGf.K.sey8hajzwSaUzjnO.cqKWDon.nB6kKanS',1,6,'SENIOR',0,'ACTIVE','2026-04-29 07:12:00'),
+(15,'Purushottam Balamallu Ijjagiri','purushottambalamallu@medplusindia.com','$2a$10$Pdp8abP.aK7fardGtdsva.2i7oSsP6DkH/wkPA46ISYFfq9KBk5uu',1,4,'SENIOR',0,'ACTIVE','2026-04-29 07:12:00'),
+(16,'Mahesh Kumar Bijja','maheshkumarb@medplusindia.com','$2a$10$kGV9glX336DoEG2Jm.D0Ie5KDVKAnIZy5rofr41yYvQ4DVSwsNwgq',1,6,'SENIOR',0,'ACTIVE','2026-04-29 07:12:00'),
+(17,'Rakesh Dudapaka','rakesh.d@medplusindia.com','$2a$10$U.foczTk0aYQVzqppHa6ue1PtU1T5J6oQTr9TbrJ3HzkXCBuhSuve',2,6,'JUNIOR',0,'ACTIVE','2026-04-29 07:12:00'),
+(54,'Rohit','rohit@medplus.com','$2a$10$7ar70.hmqpICz0hBODxGsuLoSi7MRwEBQOHW0.6bhewTdMoAr6L3W',7,1,'SENIOR',0,'ACTIVE','2026-04-29 12:15:00'),
+(55,'Yogesh G','yogeshg@medplusindia.com','$2a$10$seOHtFEKHu8baR5ZBowDhuoU2LY8zUoczGAOr2X.Bsbc/WsxvVcUe',8,1,'SENIOR',0,'ACTIVE','2026-04-29 12:26:00'),
+(56,'Amarnath P','amarnathp@medplusindia.com','$2a$10$iUOjdW53Gtbu.dxzVt9OO.KgIPEo6i5t1AYGl.xWfD6FgQp//6LYu',3,1,'SENIOR',0,'ACTIVE','2026-04-29 12:27:00'),
+(57,'Hari D','harid@medplusindia.com','$2a$10$hZQZljDIAKHZvGIIh4/EH.VyzgyD.xGo83x4B9wJTM6VLuty5SjHW',5,1,'SENIOR',0,'ACTIVE','2026-04-29 12:28:00'),
+(58,'Shashikanth P','shashikanth.p@medplusindia.com','$2a$10$xpqFpY68mjjB6TNOw2CG2uhe.1642mb.oI9h1LseymUBm92NuApKe',9,1,'SENIOR',0,'ACTIVE','2026-04-29 12:29:00'),
+(59,'Kanda Samy','kandasamy@medplusindia.com','$2a$10$ZJ0LH9DdFbRXYZ42Ny80e.P/m6/jCNfnpSeHTwZNVFbtEKmwHfpT2',10,1,'SENIOR',0,'ACTIVE','2026-04-29 12:30:00'),
+(60,'Prathibha R','prathibha.r@medplusindia.com','$2a$10$E26DVtXNMktoFORbZ7CHG.yFKKmCjy2n6Y0u/Iq9x/tW5ypehNeKC',9,1,'SENIOR',0,'ACTIVE','2026-04-29 12:31:00'),
+(61,'Anvesh Varma P','anveshvarma.p@medplusindia.com','$2a$10$Gt/JXEH5V0.ZtaBTcRuSxOIZi2gGpEJggpdcmEOqubSK0BjJGDcmW',11,1,'SENIOR',0,'ACTIVE','2026-04-29 12:32:00'),
+(62,'Devaraj','devaraj@medplusindia.com','$2a$10$GThEA0jmRsvvvnN7ltGnEuArRL3DHP4yGp3dRJd344LGYS0lQLRP.',12,1,'SENIOR',0,'ACTIVE','2026-04-29 12:33:00'),
+(63,'Suman Rao V','sumanraov@medplusib.com','$2a$10$WWV6mhNoy/jIiZjX8ghsvukx.mo6WOb30N/N91IJwlxvW1KFgmjfy',13,1,'SENIOR',0,'ACTIVE','2026-04-29 12:35:00'),
+(64,'requestor','requestor@medplus.com','$2a$10$kvNIiJ7tDZ/SCN/2EuVodeGN8EHvT7fXVKI8kNG0DO/UC45tgFXPG',7,1,'SENIOR',0,'ACTIVE','2026-04-29 13:08:00'),
+(65,'Thulasiram K','thulasiram.k@medplusindia.com','$2a$10$v9LkwfG.fK.NlRnTYqmEBuWtQVnNcZthPhwL0BPL0in7sDfx89LJK',11,1,'SENIOR',0,'ACTIVE','2026-04-29 14:38:00'),
+(66,'Nirmalya D','nirmalya.d@medplusindia.com','$2a$10$7MecVZcmejTR4dT1AwyuB.rBFXcPC2yYM3Zs6LggdIROqe29SMBOG',1,1,'JUNIOR',0,'ACTIVE','2026-04-29 16:15:00'),
+(67,'Debarati R','debarati.r@medplusindia.com','$2a$10$dhF7N0FT4VbIZNZcEJ4x/e9iA8xkIS96N6tqBaVIb4.PAJYZNksNW',8,1,'SENIOR',0,'ACTIVE','2026-04-29 16:15:00');
 
-(1,'System Administrator','admin@medplus.com','$2a$10$LyooB.pM8GNRM8D0elI10.plNV63G.pjXklINfbh.VHvGoLzmuaMS',1,1,1,'SENIOR',0,'ACTIVE','2026-04-29 07:12:00'),
-
-(2,'Sampath Kumar Thummanapelli','sampathkumart@medplusindia.com','$2a$10$VbSfgf5MqiXVR5hhvht3e.mIg2nQ5RP7pNjuGkuRcJfGIEoqoJ1W2',1,2,5,'SENIOR',0,'ACTIVE','2026-04-29 07:12:00'),
-
-(3,'Govardhan Kurva','govardhank@medplusindia.com','$2a$10$UarxD15T7AnfSbL71chhReOzjSd7eW3xQP640KFyf33ckrDjU5G06',1,2,5,'SENIOR',0,'ACTIVE','2026-04-29 07:12:00'),
-
-(4,'Raju Kandakatla','rajukandakatla@medplusindia.com','$2a$10$e5Txc/eG3iNUdk4CsqNkBu/6s4MYAuqI3Bn0c.0xNUx4OkeDQ4Yu2',1,2,5,'JUNIOR',0,'ACTIVE','2026-04-29 07:12:00'),
-
-(5,'Venkatesh Talari','venkatesht@medplusindia.com','$2a$10$QyllBsUKIg3u7F32iVVe2erM6HpDaVUhKFS/FoZzf5JBmuddrh0LC',1,2,2,'JUNIOR',0,'ACTIVE','2026-04-29 07:12:00'),
-
-(6,'Bodhan Kumar Neelam','bodhankumar.n@medplusindia.com','$2a$10$3L2Nj9DhDSXWUl6IoKqrP.f329mGrwwc0A9zascL1AlydoKEIGeFO',1,4,3,'SENIOR',0,'ACTIVE','2026-04-29 07:12:00'),
-
-(7,'Aneela Suneetha Sakilay','suneetha.s@medplusindia.com','$2a$10$abRDpiPlHIaOgjBUBn6kHOBbbAiD4hlqIHFx3p4mET8WGRYd/sPMK',1,5,7,'SENIOR',0,'ACTIVE','2026-04-29 07:12:00'),
-
-(8,'Suresh Yerrabelli','sureshy@medplusindia.com','$2a$10$IzdvzYd7R0bZ7TqIlwswAODbIVOaPF3wB9vDPQKkt14JvYRTQx7pm',1,6,6,'SENIOR',0,'ACTIVE','2026-04-29 07:12:00'),
-
-(9,'Charan reddy L','charanreddy.l@medplusindia.com','$2a$10$bEhfmNwrZ0NPrKiK8EEfAODp0TBGW.6k07nVtNK9Y5A/V7/Qt7Fym',1,7,8,'JUNIOR',0,'ACTIVE','2026-04-29 07:12:00'),
-
-(10,'Ganesh Rathod','ganeshr@medplusindia.com','$2a$10$/auWmbVz0tjMH/5ivJkPReFbP.m9GMeSE5kYlXNM0x.MfkPOx.yS6',1,8,3,'SENIOR',0,'ACTIVE','2026-04-29 07:12:00'),
-
-(11,'Bhadraiah Paidipelly','bhadraiahp@medplusindia.com','$2a$10$vyQ2na8ZRWEz5E9BI42BmeYhkqfQCdj5YxWmdQYKh6QeAMBu7omfq',1,1,1,'SENIOR',0,'ACTIVE','2026-04-29 07:12:00'),
-
-(12,'Suresh Dravidam','suresh.d@medplusindia.com','$2a$10$BmoG3Cv.zUvhBFyS35TaB.0fHSpH8Vw8H9iCihL/a0VZDi3H5eitG',1,10,6,'SENIOR',0,'ACTIVE','2026-04-29 07:12:00'),
-
-(13,'Veer Raju Pydimalla','veerarajup@medplusindia.com','$2a$10$8hQUZJkgYbqdNcjzaSWTe.QHaLn47mK2f8oM6j8NPPCvMygLHw8uG',1,10,4,'JUNIOR',0,'ACTIVE','2026-04-29 07:12:00'),
-
-(14,'Prabhu Kumar Paradesi','prabhukumar.p@medplusindia.com','$2a$10$hXF4yqvniKED2mfGf.K.sey8hajzwSaUzjnO.cqKWDon.nB6kKanS',1,11,6,'SENIOR',0,'ACTIVE','2026-04-29 07:12:00'),
-
-(15,'Purushottam Balamallu Ijjagiri','purushottambalamallu@medplusindia.com','$2a$10$Pdp8abP.aK7fardGtdsva.2i7oSsP6DkH/wkPA46ISYFfq9KBk5uu',1,13,4,'SENIOR',0,'ACTIVE','2026-04-29 07:12:00'),
-
-(16,'Mahesh Kumar Bijja','maheshkumarb@medplusindia.com','$2a$10$kGV9glX336DoEG2Jm.D0Ie5KDVKAnIZy5rofr41yYvQ4DVSwsNwgq',1,8,6,'SENIOR',0,'ACTIVE','2026-04-29 07:12:00'),
-
-(17,'Rakesh Dudapaka','rakesh.d@medplusindia.com','$2a$10$U.foczTk0aYQVzqppHa6ue1PtU1T5J6oQTr9TbrJ3HzkXCBuhSuve',2,3,6,'JUNIOR',0,'ACTIVE','2026-04-29 07:12:00'),
-
-(54,'Rohit','rohit@medplus.com','$2a$10$7ar70.hmqpICz0hBODxGsuLoSi7MRwEBQOHW0.6bhewTdMoAr6L3W',7,1,1,'SENIOR',0,'ACTIVE','2026-04-29 12:15:00'),
-
-(55,'Yogesh G','yogeshg@medplusindia.com','$2a$10$seOHtFEKHu8baR5ZBowDhuoU2LY8zUoczGAOr2X.Bsbc/WsxvVcUe',8,12,1,'SENIOR',0,'ACTIVE','2026-04-29 12:26:00'),
-
-(56,'Amarnath P','amarnathp@medplusindia.com','$2a$10$iUOjdW53Gtbu.dxzVt9OO.KgIPEo6i5t1AYGl.xWfD6FgQp//6LYu',3,12,1,'SENIOR',0,'ACTIVE','2026-04-29 12:27:00'),
-
-(57,'Hari D','harid@medplusindia.com','$2a$10$hZQZljDIAKHZvGIIh4/EH.VyzgyD.xGo83x4B9wJTM6VLuty5SjHW',5,12,1,'SENIOR',0,'ACTIVE','2026-04-29 12:28:00'),
-
-(58,'Shashikanth P','shashikanth.p@medplusindia.com','$2a$10$xpqFpY68mjjB6TNOw2CG2uhe.1642mb.oI9h1LseymUBm92NuApKe',9,12,1,'SENIOR',0,'ACTIVE','2026-04-29 12:29:00'),
-
-(59,'Kanda Samy','kandasamy@medplusindia.com','$2a$10$ZJ0LH9DdFbRXYZ42Ny80e.P/m6/jCNfnpSeHTwZNVFbtEKmwHfpT2',10,12,1,'SENIOR',0,'ACTIVE','2026-04-29 12:30:00'),
-
-(60,'Prathibha R','prathibha.r@medplusindia.com','$2a$10$E26DVtXNMktoFORbZ7CHG.yFKKmCjy2n6Y0u/Iq9x/tW5ypehNeKC',9,12,1,'SENIOR',0,'ACTIVE','2026-04-29 12:31:00'),
-
-(61,'Anvesh Varma P','anveshvarma.p@medplusindia.com','$2a$10$Gt/JXEH5V0.ZtaBTcRuSxOIZi2gGpEJggpdcmEOqubSK0BjJGDcmW',11,12,1,'SENIOR',0,'ACTIVE','2026-04-29 12:32:00'),
-
-(62,'Devaraj','devaraj@medplusindia.com','$2a$10$GThEA0jmRsvvvnN7ltGnEuArRL3DHP4yGp3dRJd344LGYS0lQLRP.',12,12,1,'SENIOR',0,'ACTIVE','2026-04-29 12:33:00'),
-
-(63,'Suman Rao V','sumanraov@medplusib.com','$2a$10$WWV6mhNoy/jIiZjX8ghsvukx.mo6WOb30N/N91IJwlxvW1KFgmjfy',13,12,1,'SENIOR',0,'ACTIVE','2026-04-29 12:35:00'),
-
-(64,'requestor','requestor@medplus.com','$2a$10$kvNIiJ7tDZ/SCN/2EuVodeGN8EHvT7fXVKI8kNG0DO/UC45tgFXPG',7,12,1,'SENIOR',0,'ACTIVE','2026-04-29 13:08:00'),
-
-(65,'Thulasiram K','thulasiram.k@medplusindia.com','$2a$10$v9LkwfG.fK.NlRnTYqmEBuWtQVnNcZthPhwL0BPL0in7sDfx89LJK',11,12,1,'SENIOR',0,'ACTIVE','2026-04-29 14:38:00'),
-
-(66,'Nirmalya D','nirmalya.d@medplusindia.com','$2a$10$7MecVZcmejTR4dT1AwyuB.rBFXcPC2yYM3Zs6LggdIROqe29SMBOG',1,13,1,'JUNIOR',0,'ACTIVE','2026-04-29 16:15:00'),
-
-(67, 'Debarati R', 'debarati.r@medplusindia.com', '$2a$10$dhF7N0FT4VbIZNZcEJ4x/e9iA8xkIS96N6tqBaVIb4.PAJYZNksNW', 8, 12, 1, 'SENIOR', 0, 'ACTIVE', '2026-04-29 16:15:00');
+-- Assign each user's role(s) via the user_roles junction table
+INSERT IGNORE INTO user_roles (user_id, role_id) VALUES
+(1,'1'),(2,'2'),(3,'2'),(4,'2'),(5,'2'),
+(6,'4'),(7,'5'),(8,'6'),(9,'7'),(10,'8'),
+(11,'1'),(12,'10'),(13,'10'),(14,'11'),(15,'13'),
+(16,'8'),(17,'3'),
+(54,'1'),
+(55,'12'),(56,'12'),(57,'12'),(58,'12'),(59,'12'),
+(60,'12'),(61,'12'),(62,'12'),(63,'12'),(64,'12'),
+(65,'12'),(66,'13'),(67,'12');
 
 -- =============================================================================
 -- "OTHER" TASK — allows requestors to describe a custom task not in the list

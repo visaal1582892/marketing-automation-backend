@@ -12,6 +12,7 @@ import com.medplus.marketing_automation_backend.enums.CampaignStatus;
 import com.medplus.marketing_automation_backend.enums.TaskStatus;
 import com.medplus.marketing_automation_backend.exception.InsufficientCapacityException;
 import com.medplus.marketing_automation_backend.repository.CampaignRepository;
+import com.medplus.marketing_automation_backend.repository.CollaboratorRepository;
 import com.medplus.marketing_automation_backend.repository.RoutingConfigRepository;
 import com.medplus.marketing_automation_backend.repository.UserRepository;
 import com.medplus.marketing_automation_backend.repository.WorkTaskRepository;
@@ -45,17 +46,20 @@ public class RoutingEngineService {
     private final RoutingConfigRepository routingConfigRepo;
     private final UserRepository          userRepo;
     private final WorkTaskRepository      workTaskRepo;
+    private final CollaboratorRepository  collaboratorRepo;
     private final QuestionnaireService    questionnaireService;
 
     public RoutingEngineService(CampaignRepository campaignRepo,
                                 RoutingConfigRepository routingConfigRepo,
                                 UserRepository userRepo,
                                 WorkTaskRepository workTaskRepo,
+                                CollaboratorRepository collaboratorRepo,
                                 QuestionnaireService questionnaireService) {
         this.campaignRepo          = campaignRepo;
         this.routingConfigRepo     = routingConfigRepo;
         this.userRepo              = userRepo;
         this.workTaskRepo          = workTaskRepo;
+        this.collaboratorRepo      = collaboratorRepo;
         this.questionnaireService  = questionnaireService;
     }
 
@@ -383,6 +387,12 @@ public class RoutingEngineService {
 
         log.info("ROUTING assignTask | campaignId={} granularTaskId={} assigneeId={} assigneeName={} status=ASSIGNED",
                 campaignId, granularTaskId, user.getUserId(), user.getFullName());
+
+        // Auto-add the campaign requestor as a collaborator so they can chat
+        // with the worker from day one without an explicit invite
+        if (requestorId > 0) {
+            collaboratorRepo.addSingleCollaborator(workTaskId, requestorId);
+        }
 
         if (granularTaskId != null) {
             List<WorkTaskAnswerRequest.AnswerItem> pre = questionnaireByGranularTaskId.get(granularTaskId);

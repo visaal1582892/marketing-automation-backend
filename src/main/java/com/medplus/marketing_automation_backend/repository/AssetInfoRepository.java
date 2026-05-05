@@ -8,7 +8,6 @@ import org.springframework.stereotype.Repository;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Timestamp;
-import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Map;
 
@@ -21,47 +20,41 @@ public class AssetInfoRepository {
         this.jdbc = jdbc;
     }
 
-    /** Insert one asset URL for a task+user. */
-    public void insert(String taskId, int userId, String url) {
-        String sql = """
-                INSERT INTO asset_info (task_id, user_id, url)
-                VALUES (:taskId, :userId, :url)
-                """;
-        jdbc.update(sql,
+    /** Insert one asset for a task+user, with optional thumbnail and original filename. */
+    public void insert(String taskId, int userId, String url, String thumbnailUrl, String originalFilename) {
+        jdbc.update("""
+                INSERT INTO asset_info (task_id, user_id, url, thumbnail_url, original_filename)
+                VALUES (:taskId, :userId, :url, :thumbnailUrl, :originalFilename)
+                """,
                 new MapSqlParameterSource()
-                        .addValue("taskId", taskId)
-                        .addValue("userId", userId)
-                        .addValue("url",    url));
+                        .addValue("taskId",           taskId)
+                        .addValue("userId",           userId)
+                        .addValue("url",              url)
+                        .addValue("thumbnailUrl",     thumbnailUrl)
+                        .addValue("originalFilename", originalFilename));
     }
 
-    /** Insert multiple asset URLs in a batch. */
-    public void insertAll(String taskId, int userId, List<String> urls) {
-        if (urls == null || urls.isEmpty()) return;
-        String sql = """
-                INSERT INTO asset_info (task_id, user_id, url)
-                VALUES (:taskId, :userId, :url)
-                """;
-        MapSqlParameterSource[] batch = urls.stream()
-                .map(url -> new MapSqlParameterSource()
-                        .addValue("taskId", taskId)
-                        .addValue("userId", userId)
-                        .addValue("url",    url))
-                .toArray(MapSqlParameterSource[]::new);
-        jdbc.batchUpdate(sql, batch);
+    /** Delete an asset only if the caller is the owner. Returns rows affected (0 = denied). */
+    public int deleteByIdAndUserId(int assetId, int userId) {
+        return jdbc.update("""
+                DELETE FROM asset_info WHERE asset_id = :id AND user_id = :uid
+                """,
+                new MapSqlParameterSource("id", assetId).addValue("uid", userId));
     }
 
-    /** All assets for a task, oldest first. */
+    /** All assets for a task, oldest first, joined with uploader name. */
     public List<AssetInfo> findByTaskId(String taskId) {
-        String sql = """
+        return jdbc.query("""
                 SELECT ai.asset_id, ai.task_id, ai.user_id,
                        u.full_name AS user_name,
-                       ai.url, ai.created_at
+                       ai.url, ai.thumbnail_url, ai.original_filename, ai.created_at
                 FROM asset_info ai
                 JOIN users u ON u.user_id = ai.user_id
                 WHERE ai.task_id = :taskId
                 ORDER BY ai.created_at ASC
-                """;
-        return jdbc.query(sql, Map.of("taskId", taskId), AssetInfoRepository::map);
+                """,
+                Map.of("taskId", taskId),
+                AssetInfoRepository::map);
     }
 
     private static AssetInfo map(ResultSet rs, int rowNum) throws SQLException {
@@ -72,6 +65,8 @@ public class AssetInfoRepository {
                 .userId(rs.getInt("user_id"))
                 .userName(rs.getString("user_name"))
                 .url(rs.getString("url"))
+                .thumbnailUrl(rs.getString("thumbnail_url"))
+                .originalFilename(rs.getString("original_filename"))
                 .createdAt(created == null ? null : created.toLocalDateTime())
                 .build();
     }

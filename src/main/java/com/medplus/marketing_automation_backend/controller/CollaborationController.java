@@ -33,6 +33,32 @@ public class CollaborationController {
         this.messagingTemplate    = messagingTemplate;
     }
 
+    // ── Collaboration lifecycle ───────────────────────────────────────────────
+
+    /**
+     * Start collaboration: auto-holds the task and ensures the requestor is a collaborator.
+     * Only the assigned worker may call this.
+     */
+    @PostMapping("/{taskId}/start")
+    public org.springframework.http.ResponseEntity<Void> start(
+            @PathVariable String taskId,
+            @AuthenticationPrincipal CustomUserDetails principal) {
+        collaborationService.startCollaboration(taskId, principal.getUser().getUserId().intValue());
+        return org.springframework.http.ResponseEntity.ok().build();
+    }
+
+    /**
+     * Pause collaboration: restores the task to its pre-hold status so it re-enters the queue.
+     * The assigned worker or an admin may call this.
+     */
+    @PostMapping("/{taskId}/pause")
+    public org.springframework.http.ResponseEntity<Void> pause(
+            @PathVariable String taskId,
+            @AuthenticationPrincipal CustomUserDetails principal) {
+        collaborationService.pauseCollaboration(taskId, principal.getUser().getUserId().intValue());
+        return org.springframework.http.ResponseEntity.ok().build();
+    }
+
     // ── Collaborator management ───────────────────────────────────────────────
 
     /**
@@ -137,7 +163,7 @@ public class CollaborationController {
 
     /**
      * Add an asset URL to a task.
-     * Body: { "url": "https://..." }
+     * Body: { "url": "https://...", "thumbnailUrl": "https://...", "originalFilename": "report.docx" }
      * Caller must be the worker or a collaborator.
      */
     @PostMapping("/{taskId}/assets")
@@ -145,9 +171,23 @@ public class CollaborationController {
             @PathVariable String taskId,
             @RequestBody Map<String, String> body,
             @AuthenticationPrincipal CustomUserDetails principal) {
-        String url = body == null ? null : body.get("url");
+        String url              = body == null ? null : body.get("url");
+        String thumbnailUrl     = body == null ? null : body.get("thumbnailUrl");
+        String originalFilename = body == null ? null : body.get("originalFilename");
         return collaborationService.addAsset(
-                taskId, principal.getUser().getUserId().intValue(), url);
+                taskId, principal.getUser().getUserId().intValue(), url, thumbnailUrl, originalFilename);
+    }
+
+    /**
+     * Delete an asset. Only the uploader may delete their own asset.
+     */
+    @DeleteMapping("/{taskId}/assets/{assetId}")
+    public org.springframework.http.ResponseEntity<Void> deleteAsset(
+            @PathVariable String taskId,
+            @PathVariable int assetId,
+            @AuthenticationPrincipal CustomUserDetails principal) {
+        collaborationService.deleteAsset(assetId, principal.getUser().getUserId().intValue());
+        return org.springframework.http.ResponseEntity.noContent().build();
     }
 
     /**

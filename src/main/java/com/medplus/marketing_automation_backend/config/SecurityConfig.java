@@ -116,8 +116,6 @@ public class SecurityConfig {
                         .requestMatchers(org.springframework.http.HttpMethod.OPTIONS, "/**").permitAll()
                         .requestMatchers("/api/auth/**").permitAll()
                         .requestMatchers("/error", "/actuator/health").permitAll()
-                        // Locally stored uploads (docs, videos, PDFs) — public so browser links work
-                        .requestMatchers("/api/upload/files/**").permitAll()
                         // WebSocket handshake — auth is handled at STOMP level by JwtChannelInterceptor
                         .requestMatchers("/ws/**").permitAll()
                         // Master data reads are open to any authenticated user (form dropdowns)

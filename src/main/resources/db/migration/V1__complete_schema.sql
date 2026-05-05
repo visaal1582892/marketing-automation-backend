@@ -1,5 +1,5 @@
 -- =============================================================================
---  V1 – Complete Baseline Schema
+--  V1 – Complete Baseline Schema (consolidated from former V1–V7 + new tables)
 --  Single source of truth for the entire database structure.
 --  Run once on a fresh database; all statements are idempotent (IF NOT EXISTS).
 -- =============================================================================
@@ -8,8 +8,6 @@ SET FOREIGN_KEY_CHECKS = 0;
 
 -- =============================================================================
 -- MASTER LOOKUP TABLES
--- All use a simple VARCHAR(20) PK with sequential numeric IDs ("1","2","3")
--- and a uniform (status ENUM) column. The application manages ID generation.
 -- =============================================================================
 
 CREATE TABLE IF NOT EXISTS departments (
@@ -109,7 +107,7 @@ CREATE TABLE IF NOT EXISTS expected_outputs (
 ) ENGINE=InnoDB;
 
 -- =============================================================================
--- GRANULAR TASKS  (reference codes: TASK-1 … TASK-35)
+-- GRANULAR TASKS
 -- =============================================================================
 
 CREATE TABLE IF NOT EXISTS granular_tasks (
@@ -151,7 +149,7 @@ CREATE TABLE IF NOT EXISTS role_task_mapping (
 ) ENGINE=InnoDB;
 
 -- =============================================================================
--- USERS
+-- USERS  (no role_id column — roles are in user_roles junction table)
 -- =============================================================================
 
 CREATE TABLE IF NOT EXISTS users (
@@ -160,22 +158,29 @@ CREATE TABLE IF NOT EXISTS users (
     email                  VARCHAR(255)              NOT NULL UNIQUE,
     password_hash          VARCHAR(255)              NOT NULL,
     department_id          VARCHAR(20),
-    role_id                VARCHAR(20),
     designation_id         VARCHAR(20),
     skill_level            ENUM('SENIOR','JUNIOR','INTERN'),
     current_active_tasks   INT                       DEFAULT 0,
     status                 ENUM('ACTIVE','INACTIVE') NOT NULL DEFAULT 'ACTIVE',
     created_at             TIMESTAMP                 DEFAULT CURRENT_TIMESTAMP,
-    CONSTRAINT fk_users_dept        FOREIGN KEY (department_id)   REFERENCES departments(department_id) on delete cascade,
-    CONSTRAINT fk_users_role        FOREIGN KEY (role_id)         REFERENCES roles(role_id) on delete cascade,
-    CONSTRAINT fk_users_designation FOREIGN KEY (designation_id)  REFERENCES designations(designation_id) on delete cascade
+    CONSTRAINT fk_users_dept        FOREIGN KEY (department_id)   REFERENCES departments(department_id) ON DELETE CASCADE,
+    CONSTRAINT fk_users_designation FOREIGN KEY (designation_id)  REFERENCES designations(designation_id) ON DELETE CASCADE
+) ENGINE=InnoDB;
+
+-- =============================================================================
+-- USER ROLES  (junction table — many roles per user)
+-- =============================================================================
+
+CREATE TABLE IF NOT EXISTS user_roles (
+    user_id INT         NOT NULL,
+    role_id VARCHAR(20) NOT NULL,
+    PRIMARY KEY (user_id, role_id),
+    CONSTRAINT fk_ur_user FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE CASCADE,
+    CONSTRAINT fk_ur_role FOREIGN KEY (role_id) REFERENCES roles(role_id) ON DELETE CASCADE
 ) ENGINE=InnoDB;
 
 -- =============================================================================
 -- CAMPAIGNS
--- All previously-enum form fields are stored as plain VARCHAR strings.
--- Multi-select fields (audience, tone, vendor_type, language) store
--- comma-separated display names for zero-JOIN reads.
 -- =============================================================================
 
 CREATE TABLE IF NOT EXISTS campaigns (
@@ -232,7 +237,9 @@ CREATE TABLE IF NOT EXISTS campaign_deliverables (
 
 -- =============================================================================
 -- WORK TASKS
--- task_id uses sequential VARCHAR codes (WORK-TASK-1, WORK-TASK-2, …)
+-- No asset_url (replaced by asset_info table).
+-- No worker_comment (replaced by worker_comments table).
+-- Includes pre_hold_status to restore status after unhold.
 -- =============================================================================
 
 CREATE TABLE IF NOT EXISTS work_tasks (
@@ -245,6 +252,7 @@ CREATE TABLE IF NOT EXISTS work_tasks (
                                    'QC_REVIEW','REWORK','COMPLETED',
                                    'HELD','CANCELLED'
                                )             NOT NULL DEFAULT 'ASSIGNED',
+    pre_hold_status            VARCHAR(20)   NULL,
     assigned_at                TIMESTAMP     NULL,
     accepted_at                TIMESTAMP     NULL,
     started_at                 TIMESTAMP     NULL,
@@ -253,7 +261,6 @@ CREATE TABLE IF NOT EXISTS work_tasks (
     total_time_logged_minutes  INT           DEFAULT 0,
     dynamic_deadline           TIMESTAMP     NULL,
     submission_notes           TEXT,
-    asset_url                  TEXT,
     rework_count               INT           DEFAULT 0,
     created_at                 TIMESTAMP     DEFAULT CURRENT_TIMESTAMP,
     updated_at                 TIMESTAMP     DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
@@ -263,7 +270,25 @@ CREATE TABLE IF NOT EXISTS work_tasks (
 ) ENGINE=InnoDB;
 
 -- =============================================================================
--- DYNAMIC QUESTIONS  (reference codes: QUES-1 … QUES-N)
+-- WORKER COMMENTS  (replaces work_tasks.worker_comment column)
+-- Workers raise comments to flag blockers; requestors answer them.
+-- Only active (unanswered) comments are shown in the task UI.
+-- =============================================================================
+
+CREATE TABLE IF NOT EXISTS worker_comments (
+    comment_id  INT          NOT NULL AUTO_INCREMENT PRIMARY KEY,
+    task_id     VARCHAR(20)  NOT NULL,
+    user_id     INT          NOT NULL,
+    comment     TEXT         NOT NULL,
+    is_answered TINYINT(1)   NOT NULL DEFAULT 0,
+    created_at  TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at  TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    CONSTRAINT fk_wc_task FOREIGN KEY (task_id) REFERENCES work_tasks(task_id) ON DELETE CASCADE,
+    CONSTRAINT fk_wc_user FOREIGN KEY (user_id) REFERENCES users(user_id)
+) ENGINE=InnoDB;
+
+-- =============================================================================
+-- DYNAMIC QUESTIONS
 -- =============================================================================
 
 CREATE TABLE IF NOT EXISTS dynamic_questions (
@@ -289,31 +314,28 @@ CREATE TABLE IF NOT EXISTS work_task_answers (
     work_task_id  VARCHAR(20)  NOT NULL,
     question_id   VARCHAR(20)  NOT NULL,
     answer_value  TEXT,
+    UNIQUE KEY uq_wta_task_question (work_task_id, question_id),
     CONSTRAINT fk_wta_task     FOREIGN KEY (work_task_id) REFERENCES work_tasks(task_id)            ON DELETE CASCADE,
     CONSTRAINT fk_wta_question FOREIGN KEY (question_id)  REFERENCES dynamic_questions(question_id) ON DELETE CASCADE
 ) ENGINE=InnoDB;
 
 -- =============================================================================
--- APPROVALS LOG
+-- APPROVALS LOG  (no campaign_id column — derive via work_tasks)
 -- =============================================================================
 
 CREATE TABLE IF NOT EXISTS approvals_log (
     log_id        INT          NOT NULL AUTO_INCREMENT PRIMARY KEY,
-    campaign_id   INT,
     task_id       VARCHAR(20)  NOT NULL,
     reviewer_id   INT          NOT NULL,
     action_taken  ENUM('APPROVED','NEEDS_REWORK','REJECTED','REQUESTOR_REWORK') NOT NULL,
     comments      TEXT,
     created_at    TIMESTAMP    DEFAULT CURRENT_TIMESTAMP,
     CONSTRAINT fk_al_task     FOREIGN KEY (task_id)     REFERENCES work_tasks(task_id)  ON DELETE CASCADE,
-    CONSTRAINT fk_al_reviewer FOREIGN KEY (reviewer_id) REFERENCES users(user_id),
-    CONSTRAINT fk_al_campaign FOREIGN KEY (campaign_id) REFERENCES campaigns(campaign_id) ON DELETE SET NULL
+    CONSTRAINT fk_al_reviewer FOREIGN KEY (reviewer_id) REFERENCES users(user_id)
 ) ENGINE=InnoDB;
 
 -- =============================================================================
 -- CAMPAIGN FILES
--- Campaign-level reference / supporting files uploaded by the requestor.
--- Shown in all briefs for the campaign (not tied to any individual task).
 -- =============================================================================
 
 CREATE TABLE IF NOT EXISTS campaign_files (
@@ -324,6 +346,19 @@ CREATE TABLE IF NOT EXISTS campaign_files (
     uploaded_at  TIMESTAMP    DEFAULT CURRENT_TIMESTAMP,
     CONSTRAINT fk_cf_campaign FOREIGN KEY (campaign_id)
         REFERENCES campaigns(campaign_id) ON DELETE CASCADE
+) ENGINE=InnoDB;
+
+-- =============================================================================
+-- CAMPAIGN BOOKMARKS
+-- =============================================================================
+
+CREATE TABLE IF NOT EXISTS campaign_bookmarks (
+    user_id     INT      NOT NULL,
+    campaign_id INT      NOT NULL,
+    created_at  DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (user_id, campaign_id),
+    CONSTRAINT fk_bm_user     FOREIGN KEY (user_id)     REFERENCES users(user_id)     ON DELETE CASCADE,
+    CONSTRAINT fk_bm_campaign FOREIGN KEY (campaign_id) REFERENCES campaigns(campaign_id) ON DELETE CASCADE
 ) ENGINE=InnoDB;
 
 -- =============================================================================
@@ -341,6 +376,53 @@ CREATE TABLE IF NOT EXISTS lead_quality_metrics (
     status                 ENUM('ACTIVE','INACTIVE') NOT NULL DEFAULT 'ACTIVE',
     updated_at             TIMESTAMP        DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     CONSTRAINT fk_lqm_campaign FOREIGN KEY (campaign_id) REFERENCES campaigns(campaign_id)
+) ENGINE=InnoDB;
+
+-- =============================================================================
+-- TASK COLLABORATORS  (tracks who was invited to collaborate)
+-- =============================================================================
+
+CREATE TABLE IF NOT EXISTS task_collaborators (
+    id        INT          NOT NULL AUTO_INCREMENT PRIMARY KEY,
+    task_id   VARCHAR(20)  NOT NULL,
+    user_id   INT          NOT NULL,
+    added_at  TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE KEY uq_tc (task_id, user_id),
+    CONSTRAINT fk_tc_task FOREIGN KEY (task_id) REFERENCES work_tasks(task_id) ON DELETE CASCADE,
+    CONSTRAINT fk_tc_user FOREIGN KEY (user_id) REFERENCES users(user_id)
+) ENGINE=InnoDB;
+
+-- =============================================================================
+-- TASK MESSAGES  (per-task real-time chat log)
+-- =============================================================================
+
+CREATE TABLE IF NOT EXISTS task_messages (
+    message_id  INT          NOT NULL AUTO_INCREMENT PRIMARY KEY,
+    task_id     VARCHAR(20)  NOT NULL,
+    user_id     INT          NOT NULL,
+    message     TEXT         NOT NULL,
+    created_at  TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at  TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    CONSTRAINT fk_tm_task FOREIGN KEY (task_id) REFERENCES work_tasks(task_id) ON DELETE CASCADE,
+    CONSTRAINT fk_tm_user FOREIGN KEY (user_id) REFERENCES users(user_id)
+) ENGINE=InnoDB;
+
+-- =============================================================================
+-- ASSET INFO  (replaces work_tasks.asset_url)
+-- Tracks all assets uploaded by workers and collaborators.
+-- original_filename stores the user-facing filename separate from the stored UUID name.
+-- =============================================================================
+
+CREATE TABLE IF NOT EXISTS asset_info (
+    asset_id          INT          NOT NULL AUTO_INCREMENT PRIMARY KEY,
+    task_id           VARCHAR(20)  NOT NULL,
+    user_id           INT          NOT NULL,
+    url               TEXT         NOT NULL,
+    thumbnail_url     TEXT         NULL,
+    original_filename VARCHAR(500) NULL,
+    created_at        TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT fk_ai_task FOREIGN KEY (task_id) REFERENCES work_tasks(task_id) ON DELETE CASCADE,
+    CONSTRAINT fk_ai_user FOREIGN KEY (user_id) REFERENCES users(user_id)
 ) ENGINE=InnoDB;
 
 SET FOREIGN_KEY_CHECKS = 1;

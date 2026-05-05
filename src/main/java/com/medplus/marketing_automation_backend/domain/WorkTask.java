@@ -18,6 +18,7 @@ public class WorkTask {
     private String     taskId;
     private Integer    campaignId;
     private Integer    assignedTo;
+    private Integer    requestorId;
     private String     assigneeName;
     private String     granularTaskId;
     private String     granularTaskName;
@@ -41,13 +42,6 @@ public class WorkTask {
 
     // Submitted by the creator when marking the task complete (Module 3)
     private String        submissionNotes;
-
-    /**
-     * Comment left by the worker when they self-hold the task (e.g. a blocker
-     * or clarification question for the requestor). Cleared when the task is
-     * un-held.
-     */
-    private String        workerComment;
 
     /** Number of times the QC reviewer (marketing manager) has sent this task back for rework. */
     private Integer       reworkCount;
