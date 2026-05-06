@@ -15,6 +15,7 @@ import com.medplus.marketing_automation_backend.repository.CampaignBookmarkRepos
 import com.medplus.marketing_automation_backend.repository.CampaignRepository;
 import com.medplus.marketing_automation_backend.repository.UserRepository;
 import com.medplus.marketing_automation_backend.repository.WorkTaskRepository;
+import com.medplus.marketing_automation_backend.repository.WorkerCommentRepository;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -37,6 +38,7 @@ public class CampaignService {
     private final QuestionnaireService      questionnaireService;
     private final MasterDataService         masterDataService;
     private final CampaignBookmarkRepository bookmarkRepo;
+    private final WorkerCommentRepository   workerCommentRepo;
 
     public CampaignService(CampaignRepository campaignRepo,
                            WorkTaskRepository workTaskRepo,
@@ -44,7 +46,8 @@ public class CampaignService {
                            RoutingEngineService routingEngine,
                            QuestionnaireService questionnaireService,
                            MasterDataService masterDataService,
-                           CampaignBookmarkRepository bookmarkRepo) {
+                           CampaignBookmarkRepository bookmarkRepo,
+                           WorkerCommentRepository workerCommentRepo) {
         this.campaignRepo          = campaignRepo;
         this.workTaskRepo          = workTaskRepo;
         this.userRepo              = userRepo;
@@ -52,6 +55,7 @@ public class CampaignService {
         this.questionnaireService  = questionnaireService;
         this.masterDataService     = masterDataService;
         this.bookmarkRepo          = bookmarkRepo;
+        this.workerCommentRepo     = workerCommentRepo;
     }
 
     // -------------------------------------------------------------------------
@@ -110,9 +114,13 @@ public class CampaignService {
 
         // Save campaign-level supporting files
         if (req.getFileUrls() != null) {
-            for (String url : req.getFileUrls()) {
+            List<String> origNames = req.getFileOriginalNames();
+            for (int fi = 0; fi < req.getFileUrls().size(); fi++) {
+                String url = req.getFileUrls().get(fi);
                 if (url != null && !url.isBlank()) {
-                    String fileName = url.contains("/") ? url.substring(url.lastIndexOf('/') + 1) : url;
+                    String fileName = (origNames != null && fi < origNames.size() && origNames.get(fi) != null)
+                            ? origNames.get(fi)
+                            : (url.contains("/") ? url.substring(url.lastIndexOf('/') + 1) : url);
                     campaignRepo.insertCampaignFile(campaignId, url, fileName);
                 }
             }
@@ -366,13 +374,26 @@ public class CampaignService {
 
         // Add new campaign files
         if (req.getNewFileUrls() != null) {
-            for (String url : req.getNewFileUrls()) {
+            List<String> origNames = req.getNewFileOriginalNames();
+            for (int fi = 0; fi < req.getNewFileUrls().size(); fi++) {
+                String url = req.getNewFileUrls().get(fi);
                 if (url != null && !url.isBlank()) {
-                    String fileName = url.contains("/") ? url.substring(url.lastIndexOf('/') + 1) : url;
+                    String fileName = (origNames != null && fi < origNames.size() && origNames.get(fi) != null)
+                            ? origNames.get(fi)
+                            : (url.contains("/") ? url.substring(url.lastIndexOf('/') + 1) : url);
                     campaignRepo.insertCampaignFile(campaignId, url, fileName);
                 }
             }
         }
+
+        // The requestor's edit implicitly acknowledges any worker hold comments.
+        // Restore all HELD tasks to their pre-hold status and mark comments answered.
+        workTaskRepo.findByCampaignId(campaignId).stream()
+                .filter(wt -> wt.getStatus() == TaskStatus.HELD)
+                .forEach(wt -> {
+                    workerCommentRepo.markAllAnswered(wt.getTaskId());
+                    workTaskRepo.clearHoldByTaskId(wt.getTaskId());
+                });
 
         return getDetail(campaignId);
     }
@@ -504,6 +525,7 @@ public class CampaignService {
         if (task.getAssignedTo() != null) {
             userRepo.decrementActiveTasks(task.getAssignedTo().longValue());
         }
+        workTaskRepo.deactivateCollaboration(taskId);
         log.info("TASK held | taskId={} previousAssignee={}", taskId, task.getAssignedTo());
         return toWorkTaskResponse(workTaskRepo.findById(taskId).orElseThrow());
     }
@@ -709,6 +731,7 @@ public class CampaignService {
                 .map(wt -> {
                     WorkTaskResponse r = toWorkTaskResponse(wt);
                     r.setQuestionnaire(qaByTask.getOrDefault(wt.getTaskId(), Collections.emptyList()));
+                    r.setActiveComments(workerCommentRepo.findActiveByTaskId(wt.getTaskId()));
                     return r;
                 })
                 .collect(Collectors.toList());
@@ -722,11 +745,13 @@ public class CampaignService {
                 .stream()
                 .map(d -> toDeliverableResponse(d, statusByGranularTask.get(d.getGranularTaskId())))
                 .collect(Collectors.toList());
-        List<String> fileUrls = campaignRepo.findFileUrlsByCampaignId(cid);
+        List<String> fileUrls        = campaignRepo.findFileUrlsByCampaignId(cid);
+        List<String> fileOriginalNames = campaignRepo.findFileNamesByCampaignId(cid);
         CampaignResponse resp = toSummaryResponse(c);
         resp.setDeliverables(deliverables);
         resp.setWorkTasks(workTasks);
         resp.setFileUrls(fileUrls);
+        resp.setFileOriginalNames(fileOriginalNames);
         return resp;
     }
 
@@ -817,6 +842,8 @@ public class CampaignService {
                 .requestorReworkCount(wt.getRequestorReworkCount())
                 .latestManagerReworkComment(wt.getLatestManagerReworkComment())
                 .latestRequestorReworkComment(wt.getLatestRequestorReworkComment())
+                .collaborationStarted(wt.isCollaborationStarted())
+                .collaborationActive(wt.isCollaborationActive())
                 .build();
     }
 

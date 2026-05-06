@@ -1,8 +1,23 @@
 package com.medplus.marketing_automation_backend.service;
 
-import com.medplus.marketing_automation_backend.exception.UnsupportedFileFormatException;
+import java.io.IOException;
+import java.security.SecureRandom;
+import java.security.cert.X509Certificate;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Map;
+
+import javax.net.ssl.HttpsURLConnection;
+import javax.net.ssl.SSLContext;
+import javax.net.ssl.TrustManager;
+import javax.net.ssl.X509TrustManager;
+
 import org.springframework.core.io.ByteArrayResource;
-import org.springframework.http.*;
+import org.springframework.http.HttpEntity;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.HttpMethod;
+import org.springframework.http.MediaType;
+import org.springframework.http.ResponseEntity;
 import org.springframework.http.client.SimpleClientHttpRequestFactory;
 import org.springframework.stereotype.Service;
 import org.springframework.util.LinkedMultiValueMap;
@@ -10,13 +25,7 @@ import org.springframework.util.MultiValueMap;
 import org.springframework.web.client.RestTemplate;
 import org.springframework.web.multipart.MultipartFile;
 
-import javax.net.ssl.*;
-import java.io.IOException;
-import java.security.SecureRandom;
-import java.security.cert.X509Certificate;
-import java.util.ArrayList;
-import java.util.List;
-import java.util.Map;
+import com.medplus.marketing_automation_backend.exception.UnsupportedFileFormatException;
 
 /**
  * Handles asset uploads to the company image server via a three-step flow:
@@ -39,8 +48,8 @@ public class ImageUploadService {
     // ── Step 2 — Image-server details ─────────────────────────────────────────
     private static final String IMAGE_SERVER_DETAILS_URL =
             "https://marigold.medplusindia.com:6426/diagnostics/transit/image-server";
-    private static final String ORIGIN    = "rnd_internal";
-    private static final String CLIENT_ID = "medplus_rnd_app";
+    private static final String ORIGIN    = "marketing_automation";
+    private static final String CLIENT_ID = "medplus_marketing_automation_app";
 
     // ── Step 3 — Upload ────────────────────────────────────────────────────────
     private static final String IMAGE_TYPE = "LT";
@@ -65,6 +74,18 @@ public class ImageUploadService {
     // ── Public API ─────────────────────────────────────────────────────────────
 
     /**
+     * Fetches a file from the external image server by URL and returns the raw
+     * bytes.  Uses the same trust-all RestTemplate so self-signed certificates
+     * on the image server are accepted.
+     */
+    public byte[] downloadFile(String fileUrl) {
+        ResponseEntity<byte[]> response = restTemplate.exchange(
+                fileUrl, HttpMethod.GET, HttpEntity.EMPTY, byte[].class);
+        byte[] body = response.getBody();
+        return body != null ? body : new byte[0];
+    }
+
+    /**
      * Uploads every file in the list to the external image server and returns
      * rich metadata for each one.  The OAuth + server-details calls are made
      * once per batch to avoid unnecessary round-trips.
@@ -79,6 +100,17 @@ public class ImageUploadService {
             results.add(uploadSingleFile(file, details));
         }
         return results;
+    }
+
+    /**
+     * Public single-file upload: fetches a fresh OAuth token + server details for
+     * every call.  Use this when the caller wants to handle per-file failures
+     * independently (e.g. the upload controller's partial-success loop).
+     */
+    public UploadResult uploadSingleFilePublic(MultipartFile file) {
+        String oauthToken          = fetchOAuthToken();
+        ImageServerDetails details = fetchImageServerDetails(oauthToken);
+        return uploadSingleFile(file, details);
     }
 
     // ── Step 1 ─────────────────────────────────────────────────────────────────
@@ -246,7 +278,7 @@ public class ImageUploadService {
 
             SimpleClientHttpRequestFactory factory = new SimpleClientHttpRequestFactory();
             factory.setConnectTimeout(15_000);
-            factory.setReadTimeout(60_000);
+            factory.setReadTimeout(120_000);
 
             return new RestTemplate(factory);
         } catch (java.security.NoSuchAlgorithmException | java.security.KeyManagementException e) {

@@ -14,10 +14,19 @@ import com.medplus.marketing_automation_backend.repository.WorkTaskRepository;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import javax.net.ssl.*;
+import java.net.URI;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
+import java.security.SecureRandom;
+import java.security.cert.X509Certificate;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.stream.Collectors;
 
 @Service
@@ -97,7 +106,7 @@ public class CollaborationService {
             }
         }
 
-        // Admins and Marketing Managers see every task with collaborators
+        // Resolve the caller's roles once for all subsequent checks
         User caller = userRepo.findById((long) userId).orElse(null);
         boolean isAdmin = caller != null
                 && caller.getRoleIds() != null
@@ -105,32 +114,51 @@ public class CollaborationService {
         boolean isMarketingManager = caller != null
                 && caller.getRoleNames() != null
                 && caller.getRoleNames().stream().anyMatch(n -> n.equalsIgnoreCase("Marketing Manager"));
+        boolean isRequestor = caller != null
+                && caller.getRoleNames() != null
+                && caller.getRoleNames().stream().anyMatch(n -> n.equalsIgnoreCase("Requestor"));
 
-        if (isAdmin) {
-            for (WorkTask t : collaboratorRepo.findAllTasksWithOpenChat()) {
+        // Requestors (and MMs who may also be requestors) see collaborations on
+        // campaigns they created — but ONLY if they have the Requestor role.
+        // This prevents workers from accidentally seeing requestor-level cards.
+        if (isRequestor || isMarketingManager || isAdmin) {
+            for (WorkTask t : collaboratorRepo.findTasksByRequestorId(userId)) {
                 if (!merged.containsKey(t.getTaskId())) {
                     WorkTaskResponse r = CampaignService.toWorkTaskResponse(t);
-                    r.setMyRole("ADMIN");
-                    merged.put(t.getTaskId(), r);
-                }
-            }
-        } else if (isMarketingManager) {
-            for (WorkTask t : collaboratorRepo.findAllTasksWithAnyCollaborator()) {
-                if (!merged.containsKey(t.getTaskId())) {
-                    WorkTaskResponse r = CampaignService.toWorkTaskResponse(t);
-                    r.setMyRole("MANAGER");
+                    r.setMyRole("REQUESTOR");
                     merged.put(t.getTaskId(), r);
                 }
             }
         }
 
-        return new ArrayList<>(merged.values());
+        // Admins and Marketing Managers see every task that has at least one
+        // collaborator (i.e., the worker has clicked "Collaborate").
+        if (isAdmin || isMarketingManager) {
+            String role = isAdmin ? "ADMIN" : "MANAGER";
+            for (WorkTask t : collaboratorRepo.findAllTasksWithAnyCollaborator()) {
+                if (!merged.containsKey(t.getTaskId())) {
+                    WorkTaskResponse r = CampaignService.toWorkTaskResponse(t);
+                    r.setMyRole(role);
+                    merged.put(t.getTaskId(), r);
+                }
+            }
+        }
+
+        // Only expose tasks where the worker has explicitly clicked "Collaborate".
+        // This guards against stale collaborator rows where is_collaboration_started
+        // was never set, regardless of which query path added the task.
+        return merged.values().stream()
+                .filter(WorkTaskResponse::isCollaborationStarted)
+                .collect(java.util.stream.Collectors.toList());
     }
 
     /**
-     * Starts collaboration on a task: ensures the requestor is a collaborator and
-     * holds the task so the worker can focus on the collaboration chat.
-     * Can be called by the task's assigned worker.
+     * Starts collaboration on a task: marks is_collaboration_started = true,
+     * auto-adds the worker and requestor as collaborators, and — if the task is
+     * already IN_PROGRESS — also marks it active immediately.
+     *
+     * Blocked when task is HELD, QC_REVIEW, or COMPLETED (business rule 6).
+     * Can be called only by the task's assigned worker.
      */
     @Transactional
     public void startCollaboration(String taskId, int callerUserId) {
@@ -139,33 +167,51 @@ public class CollaborationService {
         if (task.getAssignedTo() == null || task.getAssignedTo() != callerUserId) {
             throw new BadRequestException("Only the assigned worker can start collaboration.");
         }
-        // Ensure requestor is a collaborator (auto-add if not already)
+        // Rule 6: block collaborate when task cannot be worked on
+        if (task.getStatus() == com.medplus.marketing_automation_backend.enums.TaskStatus.HELD
+                || task.getStatus() == com.medplus.marketing_automation_backend.enums.TaskStatus.QC_REVIEW
+                || task.getStatus() == com.medplus.marketing_automation_backend.enums.TaskStatus.COMPLETED) {
+            throw new BadRequestException(
+                    "Collaboration cannot be started when the task is " + task.getStatus() + ".");
+        }
+        // Mark started (and activate immediately when task is already in progress)
+        boolean isInProgress = task.getStatus() == com.medplus.marketing_automation_backend.enums.TaskStatus.IN_PROGRESS;
+        workTaskRepo.markCollaborationStarted(taskId, isInProgress);
+        // Always add the worker so the card appears in their OWNER view.
+        collaboratorRepo.addSingleCollaborator(taskId, callerUserId);
+        // Auto-add requestor so they can join without an explicit invite.
         if (task.getRequestorId() != null && task.getRequestorId() > 0) {
             collaboratorRepo.addSingleCollaborator(taskId, task.getRequestorId());
         }
-        // Hold the task
-        workTaskRepo.holdForCollaboration(taskId);
     }
 
     /**
-     * Pauses collaboration: restores the task to its pre-hold status so it
-     * re-enters the active work queue at the top.
-     * Can be called by the task's assigned worker.
+     * Toggles the collaboration active flag (Pause Chat / Resume Chat).
+     * When paused (active = false): chat is blocked; assets remain uploadable.
+     * Can be called by the task's assigned worker or an admin.
+     * Only permitted when the task is in an open-work status (not held/QC/completed).
      */
     @Transactional
     public void pauseCollaboration(String taskId, int callerUserId) {
         WorkTask task = workTaskRepo.findById(taskId)
                 .orElseThrow(() -> new ResourceNotFoundException("Task not found: " + taskId));
-        // Allow the worker or an admin to pause
         User caller = userRepo.findById((long) callerUserId).orElse(null);
         boolean isAdmin = caller != null
                 && caller.getRoleIds() != null
                 && caller.getRoleIds().contains("1");
         boolean isWorker = task.getAssignedTo() != null && task.getAssignedTo() == callerUserId;
         if (!isWorker && !isAdmin) {
-            throw new BadRequestException("Only the assigned worker or an admin can pause collaboration.");
+            throw new BadRequestException("Only the assigned worker or an admin can pause/resume collaboration chat.");
         }
-        workTaskRepo.resumeFromCollaboration(taskId);
+        if (!task.isCollaborationStarted()) {
+            throw new BadRequestException("Collaboration has not been started on this task.");
+        }
+        // Toggle: if currently active → deactivate; if currently inactive → activate
+        if (task.isCollaborationActive()) {
+            workTaskRepo.deactivateCollaboration(taskId);
+        } else {
+            workTaskRepo.activateCollaboration(taskId);
+        }
     }
 
     /** Returns all active users — used to populate the collaborator picker on the frontend. */
@@ -201,6 +247,81 @@ public class CollaborationService {
     public List<AssetInfo> getAssets(String taskId, int callerUserId) {
         assertAccess(taskId, callerUserId);
         return assetInfoRepo.findByTaskId(taskId);
+    }
+
+    /**
+     * Proxy-download an asset: fetches the remote file bytes and returns them
+     * so the browser receives the file from the same origin (avoids cross-origin
+     * download restriction).
+     * Returns a pair of [bytes, contentType].
+     */
+    /** Holds both the raw bytes and the actual Content-Type header from the CDN. */
+    public record DownloadResult(byte[] bytes, String contentType) {}
+
+    /**
+     * Downloads an asset from the external CDN using Java's built-in HttpClient.
+     * Uses trust-all SSL, follows redirects, and sends a browser-like User-Agent
+     * so the CDN returns the actual file rather than an HTML error/index page.
+     */
+    public DownloadResult downloadAsset(int assetId) {
+        AssetInfo asset = assetInfoRepo.findById(assetId)
+                .orElseThrow(() -> new ResourceNotFoundException("Asset not found: " + assetId));
+
+        String rawUrl = asset.getUrl();
+        // Normalise accidental double slashes in the path (e.g. "https://host:port//LT/…")
+        String url = rawUrl.replaceAll("(?<!:)//+", "/");
+
+        try {
+            SSLContext sslContext = SSLContext.getInstance("TLS");
+            sslContext.init(null, new TrustManager[]{ new X509TrustManager() {
+                @Override public X509Certificate[] getAcceptedIssuers() { return new X509Certificate[0]; }
+                @Override public void checkClientTrusted(X509Certificate[] c, String a) {}
+                @Override public void checkServerTrusted(X509Certificate[] c, String a) {}
+            }}, new SecureRandom());
+
+            HttpClient client = HttpClient.newBuilder()
+                    .sslContext(sslContext)
+                    .followRedirects(HttpClient.Redirect.ALWAYS)
+                    .connectTimeout(Duration.ofSeconds(15))
+                    .build();
+
+            HttpRequest request = HttpRequest.newBuilder()
+                    .uri(URI.create(url))
+                    .timeout(Duration.ofSeconds(120))
+                    // Mimic a browser so CDN servers return the actual file
+                    .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
+                    .header("Accept", "*/*")
+                    .GET()
+                    .build();
+
+            HttpResponse<byte[]> response = client.send(request, HttpResponse.BodyHandlers.ofByteArray());
+
+            if (response.statusCode() >= 400) {
+                throw new RuntimeException("CDN returned HTTP " + response.statusCode() + " for asset " + assetId);
+            }
+
+            String contentType = response.headers().firstValue("content-type").orElse(null);
+
+            // Detect HTML error pages — the CDN sometimes returns HTML for invalid/expired URLs
+            byte[] body = response.body() != null ? response.body() : new byte[0];
+            if (body.length > 0 && contentType != null && contentType.startsWith("text/html")) {
+                throw new RuntimeException(
+                        "CDN returned an HTML page instead of the file. The asset URL may have expired.");
+            }
+
+            return new DownloadResult(body, contentType);
+
+        } catch (RuntimeException re) {
+            throw re;
+        } catch (Exception e) {
+            throw new RuntimeException("Failed to download asset " + assetId + ": " + e.getMessage(), e);
+        }
+    }
+
+    /** Returns just the AssetInfo (for filename / content-type detection). */
+    public AssetInfo getAssetInfo(int assetId) {
+        return assetInfoRepo.findById(assetId)
+                .orElseThrow(() -> new ResourceNotFoundException("Asset not found: " + assetId));
     }
 
     // ── Access guard ──────────────────────────────────────────────────────────

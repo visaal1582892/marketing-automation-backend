@@ -71,4 +71,7 @@ public class CampaignResponse {
 
     // Campaign-level supporting files uploaded by the requestor
     private List<String> fileUrls;
+
+    // Original filenames parallel to fileUrls (index-matched)
+    private List<String> fileOriginalNames;
 }

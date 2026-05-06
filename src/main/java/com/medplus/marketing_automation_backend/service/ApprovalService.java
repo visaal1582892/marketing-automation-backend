@@ -85,6 +85,7 @@ public class ApprovalService {
                     "Use the requestor-rework endpoint to submit a requestor rework request.");
             case APPROVED -> {
                 workTaskRepo.markCompleted(taskId);
+                workTaskRepo.deactivateCollaboration(taskId); // Rule 5: COMPLETED → deactivate
                 if (task.getAssignedTo() != null) {
                     userRepo.decrementActiveTasks(task.getAssignedTo().longValue());
                 }
@@ -100,6 +101,7 @@ public class ApprovalService {
             }
             case NEEDS_REWORK -> {
                 workTaskRepo.markRework(taskId);
+                workTaskRepo.activateCollaboration(taskId); // REWORK = task back to worker → re-activate
                 log.info("QC NEEDS_REWORK | taskId={} campaignId={} comment={}",
                         taskId, task.getCampaignId(), req.getComments());
             }
@@ -209,6 +211,7 @@ public class ApprovalService {
         approvalLogRepo.insert(entry);
 
         workTaskRepo.markRework(taskId);
+        workTaskRepo.activateCollaboration(taskId); // Requestor rework → task active again → re-activate
 
         // Re-increment the assignee's active-task counter (markCompleted had decremented it).
         if (task.getAssignedTo() != null) {

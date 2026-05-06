@@ -75,6 +75,8 @@ public class WorkTaskService {
         if (updated == 0) {
             throw new BadRequestException("Unable to accept task — please refresh and try again.");
         }
+        // Rule 3: if collaboration was already started, activate it now that the task is IN_PROGRESS
+        workTaskRepo.activateCollaboration(taskId);
         return CampaignService.toWorkTaskResponse(
                 workTaskRepo.findById(taskId).orElseThrow());
     }
@@ -116,6 +118,8 @@ public class WorkTaskService {
         if (updated == 0) {
             throw new BadRequestException("Unable to complete task — please refresh and try again.");
         }
+        // Rule 5: task is now QC_REVIEW — deactivate collaboration
+        workTaskRepo.deactivateCollaboration(taskId);
         return CampaignService.toWorkTaskResponse(
                 workTaskRepo.findById(taskId).orElseThrow());
     }
@@ -138,6 +142,8 @@ public class WorkTaskService {
             throw new BadRequestException(
                     "Task cannot be held at its current status. Only ASSIGNED, IN_PROGRESS, or REWORK tasks can be held.");
         }
+        // Rule 4: task is now HELD — deactivate collaboration
+        workTaskRepo.deactivateCollaboration(taskId);
         return CampaignService.toWorkTaskResponse(
                 workTaskRepo.findById(taskId).orElseThrow());
     }
@@ -154,6 +160,11 @@ public class WorkTaskService {
         if (updated == 0) {
             throw new BadRequestException(
                     "Task is not self-held or you are not the assigned worker.");
+        }
+        // Re-activate collaboration if the task is restored to IN_PROGRESS
+        WorkTask restored = workTaskRepo.findById(taskId).orElseThrow();
+        if (restored.getStatus() == TaskStatus.IN_PROGRESS) {
+            workTaskRepo.activateCollaboration(taskId);
         }
         return CampaignService.toWorkTaskResponse(
                 workTaskRepo.findById(taskId).orElseThrow());

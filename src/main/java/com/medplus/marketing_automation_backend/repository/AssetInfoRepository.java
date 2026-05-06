@@ -10,6 +10,7 @@ import java.sql.SQLException;
 import java.sql.Timestamp;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 
 @Repository
 public class AssetInfoRepository {
@@ -32,6 +33,21 @@ public class AssetInfoRepository {
                         .addValue("url",              url)
                         .addValue("thumbnailUrl",     thumbnailUrl)
                         .addValue("originalFilename", originalFilename));
+    }
+
+    /** Fetch a single asset by its primary key. */
+    public Optional<AssetInfo> findById(int assetId) {
+        List<AssetInfo> rows = jdbc.query("""
+                SELECT ai.asset_id, ai.task_id, ai.user_id,
+                       u.full_name AS user_name,
+                       ai.url, ai.thumbnail_url, ai.original_filename, ai.created_at
+                FROM asset_info ai
+                JOIN users u ON u.user_id = ai.user_id
+                WHERE ai.asset_id = :id
+                """,
+                new MapSqlParameterSource("id", assetId),
+                AssetInfoRepository::map);
+        return rows.isEmpty() ? Optional.empty() : Optional.of(rows.get(0));
     }
 
     /** Delete an asset only if the caller is the owner. Returns rows affected (0 = denied). */

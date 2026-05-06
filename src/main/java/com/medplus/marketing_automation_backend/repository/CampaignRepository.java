@@ -351,6 +351,13 @@ public class CampaignRepository {
                 String.class);
     }
 
+    public List<String> findFileNamesByCampaignId(int campaignId) {
+        return jdbc.queryForList(
+                "SELECT file_name FROM campaign_files WHERE campaign_id = :id ORDER BY file_id",
+                new MapSqlParameterSource("id", campaignId),
+                String.class);
+    }
+
     public void deleteFileByUrl(int campaignId, String fileUrl) {
         jdbc.update(
                 "DELETE FROM campaign_files WHERE campaign_id = :campaignId AND file_url = :fileUrl",

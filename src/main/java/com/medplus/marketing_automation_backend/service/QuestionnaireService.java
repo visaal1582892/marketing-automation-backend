@@ -186,6 +186,11 @@ public class QuestionnaireService {
             int updated = workTaskRepo.clearHoldByTaskId(workTaskId);
             if (updated > 0) {
                 log.info("QUESTIONNAIRE saveAnswers | auto-cleared worker hold on task={}", workTaskId);
+                // Re-activate collaboration if task was restored to IN_PROGRESS
+                WorkTask restored = workTaskRepo.findById(workTaskId).orElse(null);
+                if (restored != null && restored.getStatus() == TaskStatus.IN_PROGRESS) {
+                    workTaskRepo.activateCollaboration(workTaskId);
+                }
             }
         }
     }

@@ -12,6 +12,10 @@ import org.springframework.messaging.handler.annotation.DestinationVariable;
 import org.springframework.messaging.handler.annotation.MessageMapping;
 import org.springframework.messaging.simp.SimpMessagingTemplate;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.MediaType;
+import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
@@ -200,5 +204,62 @@ public class CollaborationController {
             @AuthenticationPrincipal CustomUserDetails principal) {
         return collaborationService.getAssets(
                 taskId, principal.getUser().getUserId().intValue());
+    }
+
+    /**
+     * Proxy-download an asset from the external CDN.
+     * Streams the raw bytes back so the cross-origin download restriction is bypassed.
+     * Sends Content-Disposition: attachment so the browser saves rather than opens.
+     * The Content-Type is taken directly from the CDN response (most accurate),
+     * with a fallback to extension-based detection from the original filename.
+     */
+    @GetMapping("/{taskId}/assets/{assetId}/download")
+    public ResponseEntity<byte[]> downloadAsset(
+            @PathVariable String taskId,
+            @PathVariable int assetId) {
+
+        com.medplus.marketing_automation_backend.domain.AssetInfo info =
+                collaborationService.getAssetInfo(assetId);
+        CollaborationService.DownloadResult result = collaborationService.downloadAsset(assetId);
+
+        // Prefer the original filename stored at upload time; fall back to URL's last segment
+        String filename = (info.getOriginalFilename() != null && !info.getOriginalFilename().isBlank())
+                ? info.getOriginalFilename()
+                : info.getUrl().substring(info.getUrl().lastIndexOf('/') + 1);
+
+        // Use the Content-Type the CDN actually sent (strip quality params, e.g. "; charset=…")
+        MediaType mediaType = MediaType.APPLICATION_OCTET_STREAM;
+        if (result.contentType() != null && !result.contentType().isBlank()) {
+            try {
+                String ct = result.contentType().split(";")[0].trim();
+                mediaType = MediaType.parseMediaType(ct);
+            } catch (Exception ignored) { /* fall through to octet-stream */ }
+        }
+
+        // If CDN gave us a generic octet-stream or nothing, try to infer from the original filename
+        if (MediaType.APPLICATION_OCTET_STREAM.equals(mediaType)) {
+            String lower = filename.toLowerCase();
+            if      (lower.endsWith(".jpg") || lower.endsWith(".jpeg")) mediaType = MediaType.IMAGE_JPEG;
+            else if (lower.endsWith(".png"))  mediaType = MediaType.IMAGE_PNG;
+            else if (lower.endsWith(".gif"))  mediaType = MediaType.IMAGE_GIF;
+            else if (lower.endsWith(".webp")) mediaType = MediaType.parseMediaType("image/webp");
+            else if (lower.endsWith(".pdf"))  mediaType = MediaType.APPLICATION_PDF;
+            else if (lower.endsWith(".xlsx")) mediaType = MediaType.parseMediaType(
+                    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+            else if (lower.endsWith(".xls"))  mediaType = MediaType.parseMediaType("application/vnd.ms-excel");
+            else if (lower.endsWith(".mp4") || lower.endsWith(".mov") || lower.endsWith(".webm"))
+                                              mediaType = MediaType.parseMediaType("video/mp4");
+        }
+
+        HttpHeaders headers = new HttpHeaders();
+        headers.setContentType(mediaType);
+        // RFC 5987 encoding for the filename keeps non-ASCII names intact
+        String safeFilename = filename.replaceAll("[\\\\/:*?\"<>|]", "_");
+        headers.set(HttpHeaders.CONTENT_DISPOSITION,
+                "attachment; filename=\"" + safeFilename + "\"; filename*=UTF-8''" +
+                java.net.URLEncoder.encode(filename, java.nio.charset.StandardCharsets.UTF_8)
+                        .replace("+", "%20"));
+        headers.setCacheControl("no-cache");
+        return new ResponseEntity<>(result.bytes(), headers, HttpStatus.OK);
     }
 }

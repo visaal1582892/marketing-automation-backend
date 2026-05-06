@@ -55,6 +55,9 @@ public class RequestorCampaignUpdateRequest {
     // New campaign-level files to attach
     private List<String> newFileUrls;
 
+    // Original filenames parallel to newFileUrls (index-matched)
+    private List<String> newFileOriginalNames;
+
     // Existing file URLs the requestor wants removed
     private List<String> removedFileUrls;
 }

@@ -79,6 +79,18 @@ public class WorkTaskResponse {
     private List<WorkTaskQuestionnaireBriefItem> questionnaire;
 
     /**
+     * True once the worker has clicked "Collaborate" on this task.
+     * Controls whether a collaboration card is shown for this task.
+     */
+    private boolean collaborationStarted;
+
+    /**
+     * True when collaboration is currently open (chat + asset uploads enabled).
+     * False when the task is HELD, QC_REVIEW, COMPLETED, or owner manually paused.
+     */
+    private boolean collaborationActive;
+
+    /**
      * Role of the requesting user relative to this task in a collaboration context.
      * "OWNER" = the assigned worker who invited collaborators.
      * "COLLABORATOR" = a user who was invited to collaborate.

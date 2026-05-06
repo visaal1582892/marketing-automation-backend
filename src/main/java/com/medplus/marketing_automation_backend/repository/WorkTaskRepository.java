@@ -29,6 +29,8 @@ public class WorkTaskRepository {
             SELECT wt.task_id, wt.campaign_id, wt.assigned_to,
                    wt.granular_task_id,
                    wt.status,
+                   wt.is_collaboration_started,
+                   wt.is_collaboration_active,
                    wt.assigned_at, wt.accepted_at, wt.started_at,
                    wt.submitted_at, wt.completed_at,
                    wt.total_time_logged_minutes, wt.dynamic_deadline,
@@ -40,6 +42,7 @@ public class WorkTaskRepository {
                    c.deadline    AS campaign_deadline,
                    c.priority    AS campaign_priority,
                    c.status      AS campaign_status,
+                   c.requestor_id,
                    rt.requirement_name,
                    req.full_name AS requestor_name,
                    (SELECT COUNT(*) FROM approvals_log al
@@ -326,6 +329,53 @@ public class WorkTaskRepository {
                        pre_hold_status = NULL
                  WHERE task_id = :id
                    AND status  = 'HELD'
+                """,
+                new MapSqlParameterSource("id", taskId));
+    }
+
+    /**
+     * Marks collaboration as started and, if the task is already IN_PROGRESS,
+     * also activates it immediately.
+     *
+     * @param taskId      the work task to update
+     * @param isInProgress pass {@code true} when the task is currently IN_PROGRESS
+     *                     so collaboration becomes active right away
+     */
+    public int markCollaborationStarted(String taskId, boolean isInProgress) {
+        return jdbc.update("""
+                UPDATE work_tasks
+                   SET is_collaboration_started = 1,
+                       is_collaboration_active  = :active
+                 WHERE task_id = :id
+                """,
+                new MapSqlParameterSource("id", taskId)
+                        .addValue("active", isInProgress));
+    }
+
+    /**
+     * Activates collaboration chat + assets for a task, but only if collaboration
+     * was already started. Safe to call unconditionally on status transitions.
+     */
+    public int activateCollaboration(String taskId) {
+        return jdbc.update("""
+                UPDATE work_tasks
+                   SET is_collaboration_active = 1
+                 WHERE task_id = :id
+                   AND is_collaboration_started = 1
+                """,
+                new MapSqlParameterSource("id", taskId));
+    }
+
+    /**
+     * Deactivates collaboration chat + assets for a task, but only if collaboration
+     * was already started. Safe to call unconditionally on status transitions.
+     */
+    public int deactivateCollaboration(String taskId) {
+        return jdbc.update("""
+                UPDATE work_tasks
+                   SET is_collaboration_active = 0
+                 WHERE task_id = :id
+                   AND is_collaboration_started = 1
                 """,
                 new MapSqlParameterSource("id", taskId));
     }
@@ -792,6 +842,8 @@ public class WorkTaskRepository {
                 .granularTaskName(rs.getString("granular_task_name"))
                 .taskTypeName(rs.getString("task_type_name"))
                 .status(safeEnum(TaskStatus.class, rs.getString("status")))
+                .collaborationStarted(rs.getBoolean("is_collaboration_started"))
+                .collaborationActive(rs.getBoolean("is_collaboration_active"))
                 .assignedAt(toLocalDateTime(rs, "assigned_at"))
                 .acceptedAt(toLocalDateTime(rs, "accepted_at"))
                 .startedAt(toLocalDateTime(rs, "started_at"))
@@ -809,6 +861,7 @@ public class WorkTaskRepository {
                 .campaignDeadline(rs.getDate("campaign_deadline") == null ? null : rs.getDate("campaign_deadline").toLocalDate())
                 .campaignPriority(safeEnum(Priority.class, rs.getString("campaign_priority")))
                 .campaignStatus(safeEnum(CampaignStatus.class, rs.getString("campaign_status")))
+                .requestorId(getNullableInt(rs, "requestor_id"))
                 .requirementTypeName(rs.getString("requirement_name"))
                 .requestorName(rs.getString("requestor_name"))
                 .build();

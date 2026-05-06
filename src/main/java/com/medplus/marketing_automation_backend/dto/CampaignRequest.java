@@ -50,4 +50,7 @@ public class CampaignRequest {
 
     // Campaign-level supporting files (uploaded URLs)
     private List<String> fileUrls;
+
+    // Original filenames parallel to fileUrls (index-matched)
+    private List<String> fileOriginalNames;
 }

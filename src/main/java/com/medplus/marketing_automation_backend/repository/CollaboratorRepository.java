@@ -75,6 +75,8 @@ public class CollaboratorRepository {
         String sql = """
                 SELECT wt.task_id, wt.campaign_id, wt.assigned_to,
                        wt.granular_task_id, wt.status,
+                       wt.is_collaboration_started,
+                       wt.is_collaboration_active,
                        wt.assigned_at, wt.accepted_at, wt.started_at,
                        wt.submitted_at, wt.completed_at,
                        wt.total_time_logged_minutes, wt.dynamic_deadline,
@@ -127,6 +129,8 @@ public class CollaboratorRepository {
         String sql = """
                 SELECT wt.task_id, wt.campaign_id, wt.assigned_to,
                        wt.granular_task_id, wt.status,
+                       wt.is_collaboration_started,
+                       wt.is_collaboration_active,
                        wt.assigned_at, wt.accepted_at, wt.started_at,
                        wt.submitted_at, wt.completed_at,
                        wt.total_time_logged_minutes, wt.dynamic_deadline,
@@ -170,6 +174,61 @@ public class CollaboratorRepository {
         return jdbc.query(sql, Map.of("userId", userId), CollaboratorRepository::mapWorkTask);
     }
 
+    /**
+     * All tasks where the campaign's requestor_id matches the given userId
+     * AND the task has at least one collaborator — used so requestors see
+     * every collaboration on their campaigns even if not explicitly invited.
+     */
+    public List<WorkTask> findTasksByRequestorId(int requestorId) {
+        String sql = """
+                SELECT wt.task_id, wt.campaign_id, wt.assigned_to,
+                       wt.granular_task_id, wt.status,
+                       wt.is_collaboration_started,
+                       wt.is_collaboration_active,
+                       wt.assigned_at, wt.accepted_at, wt.started_at,
+                       wt.submitted_at, wt.completed_at,
+                       wt.total_time_logged_minutes, wt.dynamic_deadline,
+                       wt.submission_notes,
+                       wt.created_at, wt.updated_at,
+                       u.full_name    AS assignee_name,
+                       gt.task_name  AS granular_task_name,
+                       tt.task_name  AS task_type_name,
+                       c.deadline    AS campaign_deadline,
+                       c.priority    AS campaign_priority,
+                       c.status      AS campaign_status,
+                       c.requestor_id AS requestor_id,
+                       rt.requirement_name,
+                       req.full_name AS requestor_name,
+                       (SELECT COUNT(*) FROM approvals_log al
+                         WHERE al.task_id = wt.task_id
+                           AND al.action_taken = 'NEEDS_REWORK') AS rework_count,
+                       (SELECT COUNT(*) FROM approvals_log al
+                         WHERE al.task_id = wt.task_id
+                           AND al.action_taken = 'REQUESTOR_REWORK') AS requestor_rework_count,
+                       (SELECT al.comments FROM approvals_log al
+                         WHERE al.task_id = wt.task_id
+                           AND al.action_taken = 'NEEDS_REWORK'
+                         ORDER BY al.created_at DESC LIMIT 1) AS latest_manager_rework_comment,
+                       (SELECT al.comments FROM approvals_log al
+                         WHERE al.task_id = wt.task_id
+                           AND al.action_taken = 'REQUESTOR_REWORK'
+                         ORDER BY al.created_at DESC LIMIT 1) AS latest_requestor_rework_comment
+                FROM work_tasks wt
+                LEFT JOIN users             u   ON u.user_id              = wt.assigned_to
+                LEFT JOIN granular_tasks    gt  ON gt.task_id             = wt.granular_task_id
+                LEFT JOIN task_types        tt  ON tt.task_type_id        = gt.task_type_id
+                LEFT JOIN campaigns         c   ON c.campaign_id          = wt.campaign_id
+                LEFT JOIN requirement_types rt  ON rt.requirement_type_id = c.requirement_type_id
+                LEFT JOIN users             req ON req.user_id            = c.requestor_id
+                WHERE c.requestor_id = :requestorId
+                  AND wt.status NOT IN ('CANCELLED')
+                  AND EXISTS (SELECT 1 FROM task_collaborators tc WHERE tc.task_id = wt.task_id)
+                ORDER BY wt.created_at DESC
+                """;
+        return jdbc.query(sql, new MapSqlParameterSource("requestorId", requestorId),
+                CollaboratorRepository::mapWorkTask);
+    }
+
     // -------------------------------------------------------------------------
     // Row mappers
     // -------------------------------------------------------------------------
@@ -204,6 +263,8 @@ public class CollaboratorRepository {
         String sql = """
                 SELECT wt.task_id, wt.campaign_id, wt.assigned_to,
                        wt.granular_task_id, wt.status,
+                       wt.is_collaboration_started,
+                       wt.is_collaboration_active,
                        wt.assigned_at, wt.accepted_at, wt.started_at,
                        wt.submitted_at, wt.completed_at,
                        wt.total_time_logged_minutes, wt.dynamic_deadline,
@@ -254,6 +315,8 @@ public class CollaboratorRepository {
         String sql = """
                 SELECT wt.task_id, wt.campaign_id, wt.assigned_to,
                        wt.granular_task_id, wt.status,
+                       wt.is_collaboration_started,
+                       wt.is_collaboration_active,
                        wt.assigned_at, wt.accepted_at, wt.started_at,
                        wt.submitted_at, wt.completed_at,
                        wt.total_time_logged_minutes, wt.dynamic_deadline,
@@ -307,6 +370,8 @@ public class CollaboratorRepository {
                 .granularTaskName(rs.getString("granular_task_name"))
                 .taskTypeName(rs.getString("task_type_name"))
                 .status(safeEnum(TaskStatus.class, rs.getString("status")))
+                .collaborationStarted(rs.getBoolean("is_collaboration_started"))
+                .collaborationActive(rs.getBoolean("is_collaboration_active"))
                 .assignedAt(toLocalDateTime(rs, "assigned_at"))
                 .acceptedAt(toLocalDateTime(rs, "accepted_at"))
                 .startedAt(toLocalDateTime(rs, "started_at"))

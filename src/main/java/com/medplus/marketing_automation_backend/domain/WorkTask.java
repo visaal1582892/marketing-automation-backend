@@ -58,6 +58,16 @@ public class WorkTask {
     private LocalDateTime createdAt;
     private LocalDateTime updatedAt;
 
+    /** True once the worker has clicked "Collaborate" — never reverts to false. */
+    private boolean collaborationStarted;
+
+    /**
+     * True when the collaboration is currently open for chat and asset uploads.
+     * Set to false automatically when the task enters HELD, QC_REVIEW, or COMPLETED,
+     * and can also be toggled manually by the owner (Pause Chat).
+     */
+    private boolean collaborationActive;
+
     // Campaign context (populated for employee-facing views)
     private LocalDate      campaignDeadline;
     private Priority       campaignPriority;
