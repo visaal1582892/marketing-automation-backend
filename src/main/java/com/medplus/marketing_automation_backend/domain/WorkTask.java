@@ -71,7 +71,8 @@ public class WorkTask {
     // Campaign context (populated for employee-facing views)
     private LocalDate      campaignDeadline;
     private Priority       campaignPriority;
-    private String         requirementTypeName;
     private String         requestorName;
+    /** Name of whoever performed the most recent approvals_log action; null for old tasks with no log. */
+    private String         latestActionDoneByName;
     private CampaignStatus campaignStatus;
 }

@@ -43,6 +43,8 @@ public class FlywaySchemaRepairRunner implements CommandLineRunner {
             log.warn("FlywaySchemaRepairRunner: user_roles still missing after context init — applying DDL directly.");
             createUserRolesDirectly();
         }
+        ensureTaskTypeIdColumn();
+        ensureActionDoneByColumn();
     }
 
     private void repairFullWipe() {
@@ -79,6 +81,71 @@ public class FlywaySchemaRepairRunner implements CommandLineRunner {
             }
         } catch (Exception e) {
             log.error("FlywaySchemaRepairRunner: direct DDL failed — {}", e.getMessage());
+        }
+    }
+
+    /**
+     * Idempotent: ensures task_type_id column exists on the campaigns table
+     * and migrates existing requirement_type_id values into it as JSON arrays.
+     * Safe to run on every startup — only touches rows that still need migration.
+     */
+    private void ensureTaskTypeIdColumn() {
+        try {
+            // 1. Check if the column already exists (compatible with all MySQL versions).
+            Integer colCount = jdbc.queryForObject(
+                "SELECT COUNT(*) FROM information_schema.COLUMNS "
+                + "WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'campaigns' AND COLUMN_NAME = 'task_type_id'",
+                Integer.class);
+            if (colCount == null || colCount == 0) {
+                jdbc.execute(
+                    "ALTER TABLE campaigns ADD COLUMN task_type_id VARCHAR(500) NULL AFTER requirement_type_id");
+                log.info("FlywaySchemaRepairRunner: task_type_id column added to campaigns table.");
+            } else {
+                log.info("FlywaySchemaRepairRunner: task_type_id column already exists on campaigns table.");
+            }
+
+            // 2. For campaigns that already have a plain (non-JSON) task_type_id, wrap it.
+            int wrapped = jdbc.update(
+                "UPDATE campaigns SET task_type_id = JSON_ARRAY(task_type_id) "
+                + "WHERE task_type_id IS NOT NULL AND task_type_id != '' "
+                + "AND LEFT(TRIM(task_type_id), 1) != '['");
+            if (wrapped > 0) log.info("FlywaySchemaRepairRunner: wrapped {} plain task_type_id values into JSON arrays.", wrapped);
+
+            // 3. For campaigns with no task_type_id but with a legacy requirement_type_id,
+            //    copy and wrap requirement_type_id as a JSON array into task_type_id.
+            Integer reqColExists = jdbc.queryForObject(
+                "SELECT COUNT(*) FROM information_schema.COLUMNS "
+                + "WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'campaigns' AND COLUMN_NAME = 'requirement_type_id'",
+                Integer.class);
+            if (reqColExists != null && reqColExists > 0) {
+                int migrated = jdbc.update(
+                    "UPDATE campaigns SET task_type_id = JSON_ARRAY(requirement_type_id) "
+                    + "WHERE (task_type_id IS NULL OR task_type_id = '') "
+                    + "AND requirement_type_id IS NOT NULL AND requirement_type_id != ''");
+                if (migrated > 0) log.info("FlywaySchemaRepairRunner: migrated {} rows from requirement_type_id to task_type_id.", migrated);
+
+                // 4. Now drop the legacy column.
+                jdbc.execute("ALTER TABLE campaigns DROP COLUMN requirement_type_id");
+                log.info("FlywaySchemaRepairRunner: requirement_type_id column dropped from campaigns table.");
+            }
+
+        } catch (Exception e) {
+            log.error("FlywaySchemaRepairRunner: task_type_id migration failed — {}", e.getMessage());
+        }
+    }
+
+    /**
+     * Idempotent: extends the approvals_log.action_taken ENUM to include HELD and UNHOLD.
+     * Safe to run every startup — MySQL silently ignores repeated MODIFY when the definition
+     * is already correct.
+     */
+    private void ensureActionDoneByColumn() {
+        try {
+            jdbc.execute("ALTER TABLE approvals_log MODIFY COLUMN action_taken "
+                + "ENUM('APPROVED','NEEDS_REWORK','REJECTED','REQUESTOR_REWORK','HELD','UNHOLD') NOT NULL");
+            log.info("FlywaySchemaRepairRunner: approvals_log action_taken ENUM extended (HELD/UNHOLD).");
+        } catch (Exception e) {
+            log.error("FlywaySchemaRepairRunner: approvals_log ENUM extension failed — {}", e.getMessage());
         }
     }
 

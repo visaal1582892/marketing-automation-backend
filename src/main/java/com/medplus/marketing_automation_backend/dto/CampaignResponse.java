@@ -21,8 +21,9 @@ public class CampaignResponse {
     private String        businessObjectiveId; // raw stored ID, for edit form pre-population
     private String        businessObjective;   // resolved display name
 
-    private String        requirementTypeId;
-    private String        requirementTypeName;
+    // Task Type (JSON array IDs stored in DB, resolved to display name at service layer)
+    private String        taskTypeId;
+    private String        taskTypeName;
 
     private String        audienceTypeId;   // raw JSON array of IDs, for edit form pre-population
     private String        audienceName;     // resolved display names, for brief display
@@ -68,6 +69,12 @@ public class CampaignResponse {
     // Enriched — deliverable specs & work tasks for detail view
     private List<DeliverableResponse> deliverables;
     private List<WorkTaskResponse>    workTasks;
+
+    // Task summary counts (populated in list views, avoids N+1 work-task queries)
+    private Integer taskCount;
+    private Integer completedTaskCount;
+    private Boolean hasRework;
+    private Boolean hasQcReview;
 
     // Campaign-level supporting files uploaded by the requestor
     private List<String> fileUrls;

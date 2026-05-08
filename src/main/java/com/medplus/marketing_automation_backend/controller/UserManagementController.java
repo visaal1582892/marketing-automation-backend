@@ -1,5 +1,6 @@
 package com.medplus.marketing_automation_backend.controller;
 
+import com.medplus.marketing_automation_backend.dto.PagedResponse;
 import com.medplus.marketing_automation_backend.dto.UserRequest;
 import com.medplus.marketing_automation_backend.dto.UserResponse;
 import com.medplus.marketing_automation_backend.service.UserManagementService;
@@ -22,8 +23,21 @@ public class UserManagementController {
     }
 
     @GetMapping
-    public List<UserResponse> list(@RequestParam(defaultValue = "false") boolean includeInactive) {
-        return userManagementService.list(includeInactive);
+    public PagedResponse<UserResponse> list(
+            @RequestParam(defaultValue = "true") boolean includeInactive,
+            @RequestParam(required = false) String name,
+            @RequestParam(required = false) String email,
+            @RequestParam(required = false) String roleName,
+            @RequestParam(required = false) String departmentId,
+            @RequestParam(required = false) String designationId,
+            @RequestParam(required = false) String skillLevel,
+            @RequestParam(required = false) String status,
+            @RequestParam(defaultValue = "0")   int page,
+            @RequestParam(defaultValue = "20")  int size) {
+
+        return userManagementService.listPaged(
+                includeInactive, name, email, roleName,
+                departmentId, designationId, skillLevel, status, page, size);
     }
 
     @GetMapping("/{id}")

@@ -103,6 +103,16 @@ public class CollaborationController {
     }
 
     /**
+     * Lightweight active-collaboration count for the sidebar badge.
+     * Runs a single COUNT query — call this for badge updates instead of /my.
+     */
+    @GetMapping("/active-count")
+    public int activeCount(@AuthenticationPrincipal CustomUserDetails principal) {
+        return collaborationService.getActiveCollaborationCount(
+                principal.getUser().getUserId().intValue());
+    }
+
+    /**
      * All active users — used to populate the collaborator picker.
      */
     @GetMapping("/users")

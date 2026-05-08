@@ -3,6 +3,7 @@ package com.medplus.marketing_automation_backend.controller;
 import com.medplus.marketing_automation_backend.dto.CampaignRequest;
 import com.medplus.marketing_automation_backend.dto.CampaignResponse;
 import com.medplus.marketing_automation_backend.dto.CampaignUpdateRequest;
+import com.medplus.marketing_automation_backend.dto.PagedResponse;
 import com.medplus.marketing_automation_backend.dto.RequestorCampaignUpdateRequest;
 import com.medplus.marketing_automation_backend.dto.TaskSpecRequest;
 import com.medplus.marketing_automation_backend.dto.WorkTaskResponse;
@@ -16,6 +17,7 @@ import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.*;
 
+import java.time.LocalDate;
 import java.util.List;
 import java.util.Map;
 
@@ -42,22 +44,47 @@ public class CampaignController {
         return ResponseEntity.status(201).body(response);
     }
 
-    /** List campaigns — always returns only the caller's own requests. */
+    /** Paginated campaign list — always scoped to the caller's own requests. */
     @GetMapping
-    public List<CampaignResponse> list(
-            @AuthenticationPrincipal CustomUserDetails principal) {
-        return campaignService.listMy(principal.getUser().getUserId().intValue());
+    public PagedResponse<CampaignResponse> list(
+            @AuthenticationPrincipal CustomUserDetails principal,
+            @RequestParam(required = false) String campaignId,
+            @RequestParam(required = false) String status,
+            @RequestParam(required = false) String priority,
+            @RequestParam(required = false) String dateFrom,
+            @RequestParam(required = false) String dateTo,
+            @RequestParam(defaultValue = "0")  int page,
+            @RequestParam(defaultValue = "20") int size) {
+
+        int requestorId = principal.getUser().getUserId().intValue();
+        LocalDate from = dateFrom != null && !dateFrom.isBlank() ? LocalDate.parse(dateFrom) : null;
+        LocalDate to   = dateTo   != null && !dateTo.isBlank()   ? LocalDate.parse(dateTo)   : null;
+        return campaignService.listMyPaged(requestorId, campaignId, status, priority, from, to, page, size);
     }
 
     /**
-     * Returns COMPLETED work tasks for the caller's own campaigns.
+     * Paginated COMPLETED work tasks for the caller's own campaigns.
      * Used by the requestor's "Completed Tasks" page.
      */
     @GetMapping("/completed-tasks")
-    public List<WorkTaskResponse> completedTasks(
-            @AuthenticationPrincipal CustomUserDetails principal) {
-        return campaignService.listCompletedTasksForRequestor(
-                principal.getUser().getUserId().intValue());
+    public PagedResponse<WorkTaskResponse> completedTasks(
+            @AuthenticationPrincipal CustomUserDetails principal,
+            @RequestParam(required = false) String campaignId,
+            @RequestParam(required = false) String taskId,
+            @RequestParam(required = false) String taskName,
+            @RequestParam(required = false) String taskType,
+            @RequestParam(required = false) String completedBy,
+            @RequestParam(required = false) String dateFrom,
+            @RequestParam(required = false) String dateTo,
+            @RequestParam(defaultValue = "0")  int page,
+            @RequestParam(defaultValue = "20") int size) {
+
+        int requestorId = principal.getUser().getUserId().intValue();
+        LocalDate from = dateFrom != null && !dateFrom.isBlank() ? LocalDate.parse(dateFrom) : null;
+        LocalDate to   = dateTo   != null && !dateTo.isBlank()   ? LocalDate.parse(dateTo)   : null;
+        return campaignService.listCompletedTasksForRequestorPaged(
+                requestorId, campaignId, taskId, taskName, taskType, completedBy,
+                from, to, page, size);
     }
 
     /** Returns the caller's bookmarked campaigns. */

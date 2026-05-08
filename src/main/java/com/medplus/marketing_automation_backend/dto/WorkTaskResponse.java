@@ -16,8 +16,9 @@ public class WorkTaskResponse {
     /** Custom string PK: WORK-TASK-1, WORK-TASK-2, … */
     private String        taskId;
     private Integer       campaignId;
-    private String        requirementTypeName;
     private String        requestorName;
+    /** Name of whoever performed the latest approvals_log action; null → show "N/A" in UI. */
+    private String        latestActionDoneByName;
     private String        granularTaskId;
     private String        granularTaskName;
     private String        taskTypeName;

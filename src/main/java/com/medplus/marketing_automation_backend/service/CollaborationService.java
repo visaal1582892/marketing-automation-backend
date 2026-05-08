@@ -81,9 +81,20 @@ public class CollaborationService {
     }
 
     /**
+     * Cheap active-collaboration count for the sidebar badge.
+     * Runs a single COUNT query instead of the 3-5 heavy queries that
+     * getMyCollaborations() needs. Use this for polling-free badge updates.
+     */
+    @org.springframework.transaction.annotation.Transactional(readOnly = true)
+    public int getActiveCollaborationCount(int userId) {
+        return collaboratorRepo.countActiveForUser(userId);
+    }
+
+    /**
      * Returns all collaboration tasks for this user — as owner, requestor,
      * collaborator, or admin. Ordered newest-first.
      */
+    @org.springframework.transaction.annotation.Transactional(readOnly = true)
     public List<WorkTaskResponse> getMyCollaborations(int userId) {
         Map<String, WorkTaskResponse> merged = new LinkedHashMap<>();
 
@@ -327,15 +338,13 @@ public class CollaborationService {
     // ── Access guard ──────────────────────────────────────────────────────────
 
     /**
-     * Asserts that the caller is the task's assigned worker, a collaborator,
-     * or an admin (role_id "1"). Admins bypass all task-level restrictions.
+     * Asserts that the caller has access to the task's assets and collaboration data.
+     * Passes for: the assigned worker, any collaborator, or Marketing Manager (QC reviewer).
      */
     public void assertAccess(String taskId, int callerUserId) {
-        // Admin bypass
+        // Marketing Manager has full read access to all task assets for QC review
         User caller = userRepo.findById((long) callerUserId).orElse(null);
-        if (caller != null && caller.getRoleIds() != null && caller.getRoleIds().contains("1")) {
-            return;
-        }
+        if (caller != null && caller.hasRole("Marketing Manager")) return;
         WorkTask task = workTaskRepo.findById(taskId)
                 .orElseThrow(() -> new ResourceNotFoundException("Task not found: " + taskId));
         boolean isWorker       = task.getAssignedTo() != null && task.getAssignedTo() == callerUserId;

@@ -1,6 +1,7 @@
 package com.medplus.marketing_automation_backend.service;
 
 import com.medplus.marketing_automation_backend.domain.User;
+import com.medplus.marketing_automation_backend.dto.PagedResponse;
 import com.medplus.marketing_automation_backend.dto.UserRequest;
 import com.medplus.marketing_automation_backend.dto.UserResponse;
 import com.medplus.marketing_automation_backend.enums.RecordStatus;
@@ -36,6 +37,24 @@ public class UserManagementService {
         return userRepo.findAll(includeInactive).stream()
                 .map(UserManagementService::toResponse)
                 .collect(Collectors.toList());
+    }
+
+    /** Paginated user list with optional column-level filters. */
+    public PagedResponse<UserResponse> listPaged(
+            boolean includeInactive,
+            String name, String email, String roleName,
+            String departmentId, String designationId,
+            String skillLevel, String status,
+            int page, int size) {
+
+        PagedResponse<User> raw = userRepo.findAllPaged(
+                includeInactive, name, email, roleName,
+                departmentId, designationId, skillLevel, status, page, size);
+
+        List<UserResponse> mapped = raw.content().stream()
+                .map(UserManagementService::toResponse)
+                .collect(Collectors.toList());
+        return PagedResponse.of(mapped, raw.totalElements(), raw.page(), raw.size());
     }
 
     public UserResponse get(long userId) {

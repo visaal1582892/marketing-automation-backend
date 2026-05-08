@@ -1,17 +1,22 @@
 package com.medplus.marketing_automation_backend.service;
 
 import com.medplus.marketing_automation_backend.domain.WorkTask;
+import com.medplus.marketing_automation_backend.dto.PagedResponse;
 import com.medplus.marketing_automation_backend.dto.WorkTaskResponse;
 import com.medplus.marketing_automation_backend.enums.CampaignStatus;
 import com.medplus.marketing_automation_backend.enums.TaskStatus;
 import com.medplus.marketing_automation_backend.exception.BadRequestException;
 import com.medplus.marketing_automation_backend.exception.ResourceNotFoundException;
+import com.medplus.marketing_automation_backend.domain.ApprovalLog;
+import com.medplus.marketing_automation_backend.enums.ApprovalAction;
+import com.medplus.marketing_automation_backend.repository.ApprovalLogRepository;
 import com.medplus.marketing_automation_backend.repository.WorkTaskRepository;
 import com.medplus.marketing_automation_backend.repository.WorkerCommentRepository;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Duration;
+import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.stream.Collectors;
@@ -21,13 +26,16 @@ import java.util.stream.Collectors;
 @Service
 public class WorkTaskService {
 
-    private final WorkTaskRepository    workTaskRepo;
+    private final WorkTaskRepository      workTaskRepo;
     private final WorkerCommentRepository workerCommentRepo;
+    private final ApprovalLogRepository   approvalLogRepo;
 
     public WorkTaskService(WorkTaskRepository workTaskRepo,
-                           WorkerCommentRepository workerCommentRepo) {
+                           WorkerCommentRepository workerCommentRepo,
+                           ApprovalLogRepository approvalLogRepo) {
         this.workTaskRepo      = workTaskRepo;
         this.workerCommentRepo = workerCommentRepo;
+        this.approvalLogRepo   = approvalLogRepo;
     }
 
     // -------------------------------------------------------------------------
@@ -142,6 +150,9 @@ public class WorkTaskService {
             throw new BadRequestException(
                     "Task cannot be held at its current status. Only ASSIGNED, IN_PROGRESS, or REWORK tasks can be held.");
         }
+        approvalLogRepo.insert(ApprovalLog.builder()
+                .taskId(taskId).reviewerId(userId)
+                .actionTaken(ApprovalAction.HELD).comments(comment).build());
         // Rule 4: task is now HELD — deactivate collaboration
         workTaskRepo.deactivateCollaboration(taskId);
         return CampaignService.toWorkTaskResponse(
@@ -161,6 +172,9 @@ public class WorkTaskService {
             throw new BadRequestException(
                     "Task is not self-held or you are not the assigned worker.");
         }
+        approvalLogRepo.insert(ApprovalLog.builder()
+                .taskId(taskId).reviewerId(userId)
+                .actionTaken(ApprovalAction.UNHOLD).build());
         // Re-activate collaboration if the task is restored to IN_PROGRESS
         WorkTask restored = workTaskRepo.findById(taskId).orElseThrow();
         if (restored.getStatus() == TaskStatus.IN_PROGRESS) {
@@ -191,6 +205,24 @@ public class WorkTaskService {
         return workTaskRepo.findAll().stream()
                 .map(CampaignService::toWorkTaskResponse)
                 .collect(Collectors.toList());
+    }
+
+    /** Paginated + filtered all-tasks list for the manager's overview table. */
+    public PagedResponse<WorkTaskResponse> listAllPaged(
+            String taskId, String campaignId,
+            String requestorName, String assigneeName,
+            String taskType, String priority, String status,
+            LocalDate dateFrom, LocalDate dateTo,
+            int page, int size) {
+
+        PagedResponse<WorkTask> raw = workTaskRepo.findAllPaged(
+                taskId, campaignId, requestorName, assigneeName,
+                taskType, priority, status, dateFrom, dateTo, page, size);
+
+        List<WorkTaskResponse> mapped = raw.content().stream()
+                .map(CampaignService::toWorkTaskResponse)
+                .collect(Collectors.toList());
+        return PagedResponse.of(mapped, raw.totalElements(), raw.page(), raw.size());
     }
 
     public List<WorkTaskResponse> listPendingQcReview() {

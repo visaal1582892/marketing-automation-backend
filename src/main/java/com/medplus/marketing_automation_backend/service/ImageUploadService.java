@@ -185,7 +185,14 @@ public class ImageUploadService {
             ByteArrayResource resource = new ByteArrayResource(bytes) {
                 @Override public String getFilename() { return originalFilename; }
             };
-            body.add("files", resource);
+            // Forward the file's actual Content-Type so the image server can handle
+            // each format correctly (e.g. application/zip for ZIP files). Without
+            // this, ByteArrayResource defaults to application/octet-stream, which
+            // causes the image server to reject non-image file types.
+            MediaType partMediaType = resolvePartMediaType(file.getContentType(), originalFilename);
+            HttpHeaders partHeaders = new HttpHeaders();
+            partHeaders.setContentType(partMediaType);
+            body.add("files", new org.springframework.http.HttpEntity<>(resource, partHeaders));
         } catch (IOException e) {
             throw new RuntimeException("Could not read uploaded file '" + file.getOriginalFilename() + "': " + e.getMessage(), e);
         }
@@ -197,7 +204,7 @@ public class ImageUploadService {
         } catch (org.springframework.web.client.HttpClientErrorException ex) {
             throw new UnsupportedFileFormatException(
                     "File '" + file.getOriginalFilename() + "' was rejected by the image server: "
-                    + ex.getStatusCode() + ". Only images, videos and PDFs are supported.");
+                    + ex.getStatusCode() + " — " + ex.getResponseBodyAsString());
         }
 
         Map<String, Object> responseBody = response.getBody();
@@ -211,8 +218,7 @@ public class ImageUploadService {
             String errorMsg = responseBody.containsKey("message") ? (String) responseBody.get("message") : s;
             if (s.toUpperCase().contains("UNSUPPORTED") || s.toUpperCase().contains("FORMAT")) {
                 throw new UnsupportedFileFormatException(
-                        "File format not supported: '" + file.getOriginalFilename()
-                        + "'. Only images, videos and PDFs are accepted.");
+                        "File format not supported by the image server: '" + file.getOriginalFilename() + "' (" + errorMsg + ")");
             }
             throw new RuntimeException("Image server error for '" + file.getOriginalFilename() + "': " + errorMsg);
         }
@@ -242,6 +248,45 @@ public class ImageUploadService {
         String origName     = originalImageName != null ? originalImageName : file.getOriginalFilename();
 
         return new UploadResult(fullUrl, thumbnailUrl, origName);
+    }
+
+    /**
+     * Resolves the correct {@link MediaType} for a multipart file part so the
+     * image server receives an accurate Content-Type header rather than the
+     * generic {@code application/octet-stream} that Spring uses for
+     * {@code ByteArrayResource} when no type is specified.
+     *
+     * <p>ZIP variants (application/x-zip-compressed, multipart/x-zip, etc.)
+     * are normalised to the canonical {@code application/zip} so the image
+     * server's MIME-type validator sees a consistent value regardless of which
+     * browser or OS the file was uploaded from.
+     */
+    private static MediaType resolvePartMediaType(String contentType, String filename) {
+        if (contentType != null && !contentType.isBlank()) {
+            String ct = contentType.toLowerCase();
+            // Normalise all ZIP variants to the canonical MIME type
+            if (ct.contains("zip") || ct.equals("application/x-compressed") || ct.equals("multipart/x-zip")) {
+                return new MediaType("application", "zip");
+            }
+            try {
+                return MediaType.parseMediaType(contentType);
+            } catch (Exception ignored) { /* fall through */ }
+        }
+        // Fallback: guess from filename extension
+        if (filename != null) {
+            String lower = filename.toLowerCase();
+            if (lower.endsWith(".zip"))  return new MediaType("application", "zip");
+            if (lower.endsWith(".pdf"))  return MediaType.APPLICATION_PDF;
+            if (lower.endsWith(".jpg") || lower.endsWith(".jpeg")) return MediaType.IMAGE_JPEG;
+            if (lower.endsWith(".png"))  return MediaType.IMAGE_PNG;
+            if (lower.endsWith(".gif"))  return MediaType.IMAGE_GIF;
+            if (lower.endsWith(".mp4"))  return MediaType.parseMediaType("video/mp4");
+            if (lower.endsWith(".xlsx")) return MediaType.parseMediaType("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+            if (lower.endsWith(".xls"))  return MediaType.parseMediaType("application/vnd.ms-excel");
+            if (lower.endsWith(".pptx")) return MediaType.parseMediaType("application/vnd.openxmlformats-officedocument.presentationml.presentation");
+            if (lower.endsWith(".csv"))  return MediaType.parseMediaType("text/csv");
+        }
+        return MediaType.APPLICATION_OCTET_STREAM;
     }
 
     /** Type token helper — avoids raw-Map warnings on exchange() calls. */

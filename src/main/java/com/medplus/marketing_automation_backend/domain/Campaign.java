@@ -23,9 +23,9 @@ public class Campaign {
     private String businessObjectiveId;   // raw stored ID, for edit-form pre-population
     private String businessObjective;     // resolved display name, e.g. "Lead Generation"
 
-    // Section 2 — stores requirement name, not the ID
-    private String requirementTypeId;     // now holds the name string, e.g. "Social Media Post"
-    private String requirementTypeName;   // alias — same value, kept for API backward-compat
+    // Section 2 — Task Type (JSON array of task_type IDs, resolved at service layer)
+    private String taskTypeId;
+    private String taskTypeName;
 
     // Section 3 — comma-separated names for multi-select
     private String audienceTypeId;        // e.g. "Retail Customers,Franchise Owners"
@@ -69,4 +69,10 @@ public class Campaign {
 
     private LocalDateTime createdAt;
     private LocalDateTime updatedAt;
+
+    // Aggregated task counts (populated by list queries, not the detail query)
+    private Integer taskCount;
+    private Integer completedTaskCount;
+    private Boolean hasRework;
+    private Boolean hasQcReview;
 }

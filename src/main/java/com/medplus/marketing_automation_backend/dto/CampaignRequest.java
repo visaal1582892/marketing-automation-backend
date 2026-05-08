@@ -15,9 +15,8 @@ public class CampaignRequest {
     private String targetLocation;
     private String businessObjective;     // master item ID, or free-text if "Other"
 
-    // Section 2 – Campaign Type
-    @NotBlank
-    private String requirementTypeId;     // master item ID, or free-text if "Other"
+    // Section 2 – Task Type (multi-select, sent as List<String>)
+    private List<String> taskTypeId;
 
     // Section 3 – Audience (JSON array of IDs; free-text appended for "Other")
     private List<String> audienceTypeId;  // e.g. ["1","2"] or ["1","Custom Audience"]

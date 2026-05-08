@@ -138,9 +138,7 @@ public class RoutingEngineService {
      */
     private List<RoutingTarget> collectRoutingTargets(Campaign campaign) {
         int campaignId = campaign.getCampaignId();
-        String defaultRoleId = routingConfigRepo
-                .findDefaultRoleForRequirement(campaign.getRequirementTypeId())
-                .orElse(null);
+        String defaultRoleId = null; // requirement_type_id removed; role resolved per granular task
 
         List<CampaignDeliverable> specs    = campaignRepo.findDeliverablesByCampaignId(campaignId);
         List<WorkTask>            existing = workTaskRepo.findByCampaignId(campaignId);
@@ -270,9 +268,7 @@ public class RoutingEngineService {
                     "Parent campaign is already " + campaign.getStatus() + " — cannot reassign held task.");
         }
 
-        String defaultRoleId = routingConfigRepo
-                .findDefaultRoleForRequirement(campaign.getRequirementTypeId())
-                .orElse(null);
+        String defaultRoleId = null; // requirement_type_id removed; role resolved per granular task
         String roleId = resolveRole(task.getGranularTaskId(), defaultRoleId);
         if (roleId == null) {
             throw new InsufficientCapacityException(
@@ -310,9 +306,7 @@ public class RoutingEngineService {
         }
         Campaign campaign = campaignRepo.findById(task.getCampaignId())
                 .orElseThrow(() -> new IllegalArgumentException("Parent campaign missing"));
-        String defaultRoleId = routingConfigRepo
-                .findDefaultRoleForRequirement(campaign.getRequirementTypeId())
-                .orElse(null);
+        String defaultRoleId = null; // requirement_type_id removed; role resolved per granular task
         String roleId = resolveRole(task.getGranularTaskId(), defaultRoleId);
         if (roleId == null) return java.util.Collections.emptyList();
         return userRepo.findByRole(roleId);

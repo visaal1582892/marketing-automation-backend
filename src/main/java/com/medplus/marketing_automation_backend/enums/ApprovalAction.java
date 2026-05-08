@@ -5,7 +5,11 @@ public enum ApprovalAction {
     NEEDS_REWORK("Needs Rework"),
     REJECTED("Rejected"),
     /** Sent by the requestor after the task is COMPLETED — triggers another rework cycle. */
-    REQUESTOR_REWORK("Requestor Rework");
+    REQUESTOR_REWORK("Requestor Rework"),
+    /** Task was placed on hold (by a worker via comment, or by the manager). */
+    HELD("Held"),
+    /** Task was taken off hold and resumed or re-routed. */
+    UNHOLD("Unhold");
 
     private final String label;
     ApprovalAction(String label) { this.label = label; }

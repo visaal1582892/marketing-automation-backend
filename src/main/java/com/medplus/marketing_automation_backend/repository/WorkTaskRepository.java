@@ -1,6 +1,7 @@
 package com.medplus.marketing_automation_backend.repository;
 
 import com.medplus.marketing_automation_backend.domain.WorkTask;
+import com.medplus.marketing_automation_backend.dto.PagedResponse;
 import com.medplus.marketing_automation_backend.enums.CampaignStatus;
 import com.medplus.marketing_automation_backend.enums.Priority;
 import com.medplus.marketing_automation_backend.enums.TaskStatus;
@@ -12,7 +13,9 @@ import org.springframework.stereotype.Repository;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Timestamp;
+import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 
@@ -24,6 +27,18 @@ public class WorkTaskRepository {
     public WorkTaskRepository(NamedParameterJdbcTemplate jdbc) {
         this.jdbc = jdbc;
     }
+
+    /** Minimal FROM + JOINs shared by both SELECT_BASE and count queries. */
+    private static final String FROM_JOINS = """
+            FROM work_tasks wt
+            LEFT JOIN users             u   ON u.user_id              = wt.assigned_to
+            LEFT JOIN granular_tasks    gt  ON gt.task_id             = wt.granular_task_id
+            LEFT JOIN task_types        tt  ON tt.task_type_id        = gt.task_type_id
+            LEFT JOIN campaigns         c   ON c.campaign_id          = wt.campaign_id
+            LEFT JOIN users             req ON req.user_id            = c.requestor_id
+            """;
+
+    private static final String COUNT_BASE = "SELECT COUNT(*) " + FROM_JOINS;
 
     private static final String SELECT_BASE = """
             SELECT wt.task_id, wt.campaign_id, wt.assigned_to,
@@ -43,7 +58,6 @@ public class WorkTaskRepository {
                    c.priority    AS campaign_priority,
                    c.status      AS campaign_status,
                    c.requestor_id,
-                   rt.requirement_name,
                    req.full_name AS requestor_name,
                    (SELECT COUNT(*) FROM approvals_log al
                      WHERE al.task_id = wt.task_id
@@ -58,15 +72,12 @@ public class WorkTaskRepository {
                    (SELECT al.comments FROM approvals_log al
                      WHERE al.task_id = wt.task_id
                        AND al.action_taken = 'REQUESTOR_REWORK'
-                     ORDER BY al.created_at DESC LIMIT 1) AS latest_requestor_rework_comment
-            FROM work_tasks wt
-            LEFT JOIN users             u   ON u.user_id              = wt.assigned_to
-            LEFT JOIN granular_tasks    gt  ON gt.task_id             = wt.granular_task_id
-            LEFT JOIN task_types        tt  ON tt.task_type_id        = gt.task_type_id
-            LEFT JOIN campaigns         c   ON c.campaign_id          = wt.campaign_id
-            LEFT JOIN requirement_types rt  ON rt.requirement_type_id = c.requirement_type_id
-            LEFT JOIN users             req ON req.user_id            = c.requestor_id
-            """;
+                     ORDER BY al.created_at DESC LIMIT 1) AS latest_requestor_rework_comment,
+                   (SELECT u_adb.full_name FROM approvals_log al_adb
+                     LEFT JOIN users u_adb ON u_adb.user_id = al_adb.reviewer_id
+                     WHERE al_adb.task_id = wt.task_id
+                     ORDER BY al_adb.log_id DESC LIMIT 1) AS latest_action_done_by_name
+            """ + FROM_JOINS;
 
     // -------------------------------------------------------------------------
     // Write
@@ -705,13 +716,14 @@ public class WorkTaskRepository {
                 new MapSqlParameterSource());
         result.put("campaignsByPriority", campaignByPriority);
 
-        // ── Campaigns by requirement type (top 8) ─────────────────────────────
+        // ── Campaigns by task type (top 8) ────────────────────────────────────
         var campaignByType = jdbc.queryForList(
                 """
-                SELECT rt.requirement_name AS name, COUNT(c.campaign_id) AS cnt
+                SELECT COALESCE(tt.task_name, c.task_type_id, 'Unknown') AS name,
+                       COUNT(c.campaign_id) AS cnt
                 FROM campaigns c
-                JOIN requirement_types rt ON rt.requirement_type_id = c.requirement_type_id
-                GROUP BY rt.requirement_name ORDER BY cnt DESC LIMIT 8
+                LEFT JOIN task_types tt ON JSON_CONTAINS(c.task_type_id, JSON_QUOTE(tt.task_type_id))
+                GROUP BY name ORDER BY cnt DESC LIMIT 8
                 """,
                 new MapSqlParameterSource());
         result.put("campaignsByType", campaignByType);
@@ -810,6 +822,156 @@ public class WorkTaskRepository {
     }
 
     // -------------------------------------------------------------------------
+    // Paged / filtered queries
+    // -------------------------------------------------------------------------
+
+    /**
+     * Paginated + filtered overview of ALL work tasks (Marketing Head / manager).
+     * All filter params are optional; pass null/blank to skip a filter.
+     * {@code dateFrom}/{@code dateTo} are matched against {@code wt.assigned_at}.
+     */
+    public PagedResponse<WorkTask> findAllPaged(
+            String taskId, String campaignId,
+            String requestorName, String assigneeName,
+            String taskType, String priority, String status,
+            LocalDate dateFrom, LocalDate dateTo,
+            int page, int size) {
+
+        MapSqlParameterSource params = new MapSqlParameterSource();
+        String where = buildAllTasksWhere(params, taskId, campaignId,
+                requestorName, assigneeName, taskType, priority, status, dateFrom, dateTo);
+
+        Long total = jdbc.queryForObject(COUNT_BASE + where, params, Long.class);
+        if (total == null) total = 0L;
+
+        String orderBy = """
+                 ORDER BY
+                   CASE c.priority WHEN 'HIGH' THEN 0 WHEN 'MEDIUM' THEN 1 WHEN 'LOW' THEN 2 ELSE 3 END,
+                   wt.created_at ASC
+                """;
+        params.addValue("_size", size).addValue("_offset", (long) page * size);
+        List<WorkTask> content = jdbc.query(
+                SELECT_BASE + where + orderBy + " LIMIT :_size OFFSET :_offset",
+                params, WorkTaskRepository::map);
+
+        return PagedResponse.of(content, total, page, size);
+    }
+
+    /**
+     * Paginated + filtered COMPLETED tasks for a specific requestor.
+     * {@code dateFrom}/{@code dateTo} are matched against {@code wt.completed_at}.
+     */
+    public PagedResponse<WorkTask> findCompletedByRequestorIdPaged(
+            int requestorId,
+            String campaignId, String taskId, String taskName,
+            String taskType, String completedBy,
+            LocalDate dateFrom, LocalDate dateTo,
+            int page, int size) {
+
+        MapSqlParameterSource params = new MapSqlParameterSource();
+        params.addValue("requestorId", requestorId);
+        List<String> conds = new ArrayList<>();
+        conds.add("c.requestor_id = :requestorId");
+        conds.add("wt.status = 'COMPLETED'");
+
+        if (hasValue(campaignId)) {
+            conds.add("CAST(wt.campaign_id AS CHAR) LIKE :campaignId");
+            params.addValue("campaignId", "%" + campaignId.trim() + "%");
+        }
+        if (hasValue(taskId)) {
+            conds.add("wt.task_id LIKE :taskId");
+            params.addValue("taskId", "%" + taskId.trim() + "%");
+        }
+        if (hasValue(taskName)) {
+            conds.add("COALESCE(gt.task_name, tt.task_name) = :taskName");
+            params.addValue("taskName", taskName.trim());
+        }
+        if (hasValue(taskType)) {
+            conds.add("tt.task_name = :taskType");
+            params.addValue("taskType", taskType.trim());
+        }
+        if (hasValue(completedBy)) {
+            conds.add("u.full_name LIKE :completedBy");
+            params.addValue("completedBy", "%" + completedBy.trim() + "%");
+        }
+        if (dateFrom != null) {
+            conds.add("wt.completed_at >= :completedFrom");
+            params.addValue("completedFrom", dateFrom.atStartOfDay());
+        }
+        if (dateTo != null) {
+            conds.add("wt.completed_at <= :completedTo");
+            params.addValue("completedTo", dateTo.atTime(23, 59, 59));
+        }
+
+        String where = " WHERE " + String.join(" AND ", conds);
+
+        Long total = jdbc.queryForObject(COUNT_BASE + where, params, Long.class);
+        if (total == null) total = 0L;
+
+        params.addValue("_size", size).addValue("_offset", (long) page * size);
+        List<WorkTask> content = jdbc.query(
+                SELECT_BASE + where + " ORDER BY wt.completed_at DESC LIMIT :_size OFFSET :_offset",
+                params, WorkTaskRepository::map);
+
+        return PagedResponse.of(content, total, page, size);
+    }
+
+    // ─── WHERE clause builder for AllTasks ───────────────────────────────────
+
+    private static String buildAllTasksWhere(
+            MapSqlParameterSource params,
+            String taskId, String campaignId,
+            String requestorName, String assigneeName,
+            String taskType, String priority, String status,
+            LocalDate dateFrom, LocalDate dateTo) {
+
+        List<String> conds = new ArrayList<>();
+
+        if (hasValue(taskId)) {
+            conds.add("wt.task_id LIKE :taskId");
+            params.addValue("taskId", "%" + taskId.trim() + "%");
+        }
+        if (hasValue(campaignId)) {
+            conds.add("CAST(wt.campaign_id AS CHAR) LIKE :campaignId");
+            params.addValue("campaignId", "%" + campaignId.trim() + "%");
+        }
+        if (hasValue(requestorName)) {
+            conds.add("req.full_name LIKE :requestorName");
+            params.addValue("requestorName", "%" + requestorName.trim() + "%");
+        }
+        if (hasValue(assigneeName)) {
+            conds.add("u.full_name LIKE :assigneeName");
+            params.addValue("assigneeName", "%" + assigneeName.trim() + "%");
+        }
+        if (hasValue(taskType)) {
+            conds.add("COALESCE(gt.task_name, tt.task_name) = :taskType");
+            params.addValue("taskType", taskType.trim());
+        }
+        if (hasValue(priority)) {
+            conds.add("c.priority = :priority");
+            params.addValue("priority", priority.trim());
+        }
+        if (hasValue(status)) {
+            conds.add("wt.status = :status");
+            params.addValue("status", status.trim());
+        }
+        if (dateFrom != null) {
+            conds.add("wt.assigned_at >= :dateFrom");
+            params.addValue("dateFrom", dateFrom.atStartOfDay());
+        }
+        if (dateTo != null) {
+            conds.add("wt.assigned_at <= :dateTo");
+            params.addValue("dateTo", dateTo.atTime(23, 59, 59));
+        }
+
+        return conds.isEmpty() ? "" : " WHERE " + String.join(" AND ", conds);
+    }
+
+    private static boolean hasValue(String s) {
+        return s != null && !s.isBlank();
+    }
+
+    // -------------------------------------------------------------------------
     // Helpers
     // -------------------------------------------------------------------------
 
@@ -858,11 +1020,11 @@ public class WorkTaskRepository {
                 .requestorReworkCount(getNullableInt(rs, "requestor_rework_count"))
                 .latestManagerReworkComment(rs.getString("latest_manager_rework_comment"))
                 .latestRequestorReworkComment(rs.getString("latest_requestor_rework_comment"))
+                .latestActionDoneByName(rs.getString("latest_action_done_by_name"))
                 .campaignDeadline(rs.getDate("campaign_deadline") == null ? null : rs.getDate("campaign_deadline").toLocalDate())
                 .campaignPriority(safeEnum(Priority.class, rs.getString("campaign_priority")))
                 .campaignStatus(safeEnum(CampaignStatus.class, rs.getString("campaign_status")))
                 .requestorId(getNullableInt(rs, "requestor_id"))
-                .requirementTypeName(rs.getString("requirement_name"))
                 .requestorName(rs.getString("requestor_name"))
                 .build();
     }

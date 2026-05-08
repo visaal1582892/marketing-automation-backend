@@ -2,6 +2,7 @@ package com.medplus.marketing_automation_backend.controller;
 
 import com.medplus.marketing_automation_backend.domain.ApprovalLog;
 import com.medplus.marketing_automation_backend.dto.ApprovalRequest;
+import com.medplus.marketing_automation_backend.dto.PagedResponse;
 import com.medplus.marketing_automation_backend.dto.UserResponse;
 import com.medplus.marketing_automation_backend.dto.WorkTaskResponse;
 import com.medplus.marketing_automation_backend.security.CustomUserDetails;
@@ -14,6 +15,7 @@ import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.*;
 
+import java.time.LocalDate;
 import java.util.List;
 import java.util.Map;
 
@@ -41,10 +43,26 @@ public class ManagerController {
     // Task QC review
     // -------------------------------------------------------------------------
 
-    /** All work tasks across all workers — Marketing Head overview with full filtering. */
+    /** Paginated + filtered all work tasks — Marketing Head overview table. */
     @GetMapping("/tasks/all")
-    public List<WorkTaskResponse> allTasks() {
-        return workTaskService.listAll();
+    public PagedResponse<WorkTaskResponse> allTasks(
+            @RequestParam(required = false) String taskId,
+            @RequestParam(required = false) String campaignId,
+            @RequestParam(required = false) String requestorName,
+            @RequestParam(required = false) String assigneeName,
+            @RequestParam(required = false) String taskType,
+            @RequestParam(required = false) String priority,
+            @RequestParam(required = false) String status,
+            @RequestParam(required = false) String dateFrom,
+            @RequestParam(required = false) String dateTo,
+            @RequestParam(defaultValue = "0")  int page,
+            @RequestParam(defaultValue = "20") int size) {
+
+        LocalDate from = dateFrom != null && !dateFrom.isBlank() ? LocalDate.parse(dateFrom) : null;
+        LocalDate to   = dateTo   != null && !dateTo.isBlank()   ? LocalDate.parse(dateTo)   : null;
+        return workTaskService.listAllPaged(
+                taskId, campaignId, requestorName, assigneeName,
+                taskType, priority, status, from, to, page, size);
     }
 
     @GetMapping("/tasks/review")
@@ -92,8 +110,9 @@ public class ManagerController {
 
     /** Holds an ASSIGNED task — removes it from the worker's queue. */
     @PostMapping("/tasks/{taskId}/hold")
-    public WorkTaskResponse holdTask(@PathVariable String taskId) {
-        return campaignService.holdTask(taskId);
+    public WorkTaskResponse holdTask(@PathVariable String taskId,
+                                     @AuthenticationPrincipal CustomUserDetails actor) {
+        return campaignService.holdTask(taskId, actor.getUser().getUserId().intValue());
     }
 
     /** Lists every task currently on hold. */
@@ -107,8 +126,9 @@ public class ManagerController {
      * eligible user automatically).
      */
     @PostMapping("/tasks/{taskId}/unhold")
-    public WorkTaskResponse unholdTask(@PathVariable String taskId) {
-        return campaignService.unholdTask(taskId);
+    public WorkTaskResponse unholdTask(@PathVariable String taskId,
+                                       @AuthenticationPrincipal CustomUserDetails actor) {
+        return campaignService.unholdTask(taskId, actor.getUser().getUserId().intValue());
     }
 
     /**

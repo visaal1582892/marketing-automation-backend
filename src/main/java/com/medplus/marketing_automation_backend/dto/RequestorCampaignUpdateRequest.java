@@ -20,8 +20,8 @@ public class RequestorCampaignUpdateRequest {
     private String targetLocation;
     private String businessObjective;
 
-    // Section 2
-    private String requirementTypeId;
+    // Section 2 – Task Type (multi-select)
+    private List<String> taskTypeId;
 
     // Section 3 – multi-select: array of master IDs + optional free-text element
     private List<String> audienceTypeId;

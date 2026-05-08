@@ -1,6 +1,7 @@
 package com.medplus.marketing_automation_backend.repository;
 
 import com.medplus.marketing_automation_backend.domain.User;
+import com.medplus.marketing_automation_backend.dto.PagedResponse;
 import com.medplus.marketing_automation_backend.enums.RecordStatus;
 import com.medplus.marketing_automation_backend.enums.SkillLevel;
 import org.springframework.dao.EmptyResultDataAccessException;
@@ -343,6 +344,72 @@ public class UserRepository {
                 ) wt ON wt.user_id = u.user_id
                    SET u.current_active_tasks = COALESCE(wt.active_count, 0)
                 """, new MapSqlParameterSource());
+    }
+
+    // ── Paged / filtered queries ─────────────────────────────────────────────────
+
+    /**
+     * Paginated user list with optional column-level filters.
+     * Role filter matches any of the user's roles by role_name (exact).
+     */
+    public PagedResponse<User> findAllPaged(
+            boolean includeInactive,
+            String name, String email, String roleName,
+            String departmentId, String designationId,
+            String skillLevel, String status,
+            int page, int size) {
+
+        MapSqlParameterSource params = new MapSqlParameterSource();
+        List<String> conds = new ArrayList<>();
+
+        if (!includeInactive) {
+            conds.add("u.status = 'ACTIVE'");
+        }
+        if (name != null && !name.isBlank()) {
+            conds.add("u.full_name LIKE :name");
+            params.addValue("name", "%" + name.trim() + "%");
+        }
+        if (email != null && !email.isBlank()) {
+            conds.add("u.email LIKE :email");
+            params.addValue("email", "%" + email.trim() + "%");
+        }
+        if (roleName != null && !roleName.isBlank()) {
+            conds.add("""
+                    EXISTS (
+                        SELECT 1 FROM user_roles ur
+                        JOIN roles r ON r.role_id = ur.role_id
+                        WHERE ur.user_id = u.user_id AND r.role_name = :roleName
+                    )""");
+            params.addValue("roleName", roleName.trim());
+        }
+        if (departmentId != null && !departmentId.isBlank()) {
+            conds.add("u.department_id = :departmentId");
+            params.addValue("departmentId", departmentId.trim());
+        }
+        if (designationId != null && !designationId.isBlank()) {
+            conds.add("u.designation_id = :designationId");
+            params.addValue("designationId", designationId.trim());
+        }
+        if (skillLevel != null && !skillLevel.isBlank()) {
+            conds.add("u.skill_level = :skillLevel");
+            params.addValue("skillLevel", skillLevel.trim());
+        }
+        if (status != null && !status.isBlank()) {
+            conds.add("u.status = :status");
+            params.addValue("status", status.trim());
+        }
+
+        String where = conds.isEmpty() ? "" : " WHERE " + String.join(" AND ", conds);
+        String countSql = "SELECT COUNT(*) FROM users u" + where;
+        Long total = jdbc.queryForObject(countSql, params, Long.class);
+        if (total == null) total = 0L;
+
+        params.addValue("_size", size).addValue("_offset", (long) page * size);
+        List<User> content = jdbc.query(
+                SELECT_BASE + where + " ORDER BY u.user_id LIMIT :_size OFFSET :_offset",
+                params, UserRepository::map);
+        enrichWithRoles(content);
+        return PagedResponse.of(content, total, page, size);
     }
 
     // ── Helpers ──────────────────────────────────────────────────────────────────

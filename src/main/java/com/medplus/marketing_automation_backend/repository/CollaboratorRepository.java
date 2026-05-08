@@ -89,7 +89,6 @@ public class CollaboratorRepository {
                        c.priority    AS campaign_priority,
                        c.status      AS campaign_status,
                        c.requestor_id AS requestor_id,
-                       rt.requirement_name,
                        req.full_name AS requestor_name,
                        (SELECT COUNT(*) FROM approvals_log al
                          WHERE al.task_id = wt.task_id
@@ -104,13 +103,16 @@ public class CollaboratorRepository {
                        (SELECT al.comments FROM approvals_log al
                          WHERE al.task_id = wt.task_id
                            AND al.action_taken = 'REQUESTOR_REWORK'
-                         ORDER BY al.created_at DESC LIMIT 1) AS latest_requestor_rework_comment
+                         ORDER BY al.created_at DESC LIMIT 1) AS latest_requestor_rework_comment,
+                       (SELECT u_adb.full_name FROM approvals_log al_adb
+                         LEFT JOIN users u_adb ON u_adb.user_id = al_adb.reviewer_id
+                         WHERE al_adb.task_id = wt.task_id
+                         ORDER BY al_adb.log_id DESC LIMIT 1) AS latest_action_done_by_name
                 FROM work_tasks wt
                 LEFT JOIN users             u   ON u.user_id              = wt.assigned_to
                 LEFT JOIN granular_tasks    gt  ON gt.task_id             = wt.granular_task_id
                 LEFT JOIN task_types        tt  ON tt.task_type_id        = gt.task_type_id
                 LEFT JOIN campaigns         c   ON c.campaign_id          = wt.campaign_id
-                LEFT JOIN requirement_types rt  ON rt.requirement_type_id = c.requirement_type_id
                 LEFT JOIN users             req ON req.user_id            = c.requestor_id
                 WHERE wt.assigned_to = :userId
                   AND EXISTS (
@@ -143,7 +145,6 @@ public class CollaboratorRepository {
                        c.priority    AS campaign_priority,
                        c.status      AS campaign_status,
                        c.requestor_id AS requestor_id,
-                       rt.requirement_name,
                        req.full_name AS requestor_name,
                        (SELECT COUNT(*) FROM approvals_log al
                          WHERE al.task_id = wt.task_id
@@ -158,14 +159,17 @@ public class CollaboratorRepository {
                        (SELECT al.comments FROM approvals_log al
                          WHERE al.task_id = wt.task_id
                            AND al.action_taken = 'REQUESTOR_REWORK'
-                         ORDER BY al.created_at DESC LIMIT 1) AS latest_requestor_rework_comment
+                         ORDER BY al.created_at DESC LIMIT 1) AS latest_requestor_rework_comment,
+                       (SELECT u_adb.full_name FROM approvals_log al_adb
+                         LEFT JOIN users u_adb ON u_adb.user_id = al_adb.reviewer_id
+                         WHERE al_adb.task_id = wt.task_id
+                         ORDER BY al_adb.log_id DESC LIMIT 1) AS latest_action_done_by_name
                 FROM task_collaborators tc
                 JOIN work_tasks wt ON wt.task_id = tc.task_id
                 LEFT JOIN users             u   ON u.user_id              = wt.assigned_to
                 LEFT JOIN granular_tasks    gt  ON gt.task_id             = wt.granular_task_id
                 LEFT JOIN task_types        tt  ON tt.task_type_id        = gt.task_type_id
                 LEFT JOIN campaigns         c   ON c.campaign_id          = wt.campaign_id
-                LEFT JOIN requirement_types rt  ON rt.requirement_type_id = c.requirement_type_id
                 LEFT JOIN users             req ON req.user_id            = c.requestor_id
                 WHERE tc.user_id = :userId
                 ORDER BY wt.assigned_at DESC
@@ -197,7 +201,6 @@ public class CollaboratorRepository {
                        c.priority    AS campaign_priority,
                        c.status      AS campaign_status,
                        c.requestor_id AS requestor_id,
-                       rt.requirement_name,
                        req.full_name AS requestor_name,
                        (SELECT COUNT(*) FROM approvals_log al
                          WHERE al.task_id = wt.task_id
@@ -212,13 +215,16 @@ public class CollaboratorRepository {
                        (SELECT al.comments FROM approvals_log al
                          WHERE al.task_id = wt.task_id
                            AND al.action_taken = 'REQUESTOR_REWORK'
-                         ORDER BY al.created_at DESC LIMIT 1) AS latest_requestor_rework_comment
+                         ORDER BY al.created_at DESC LIMIT 1) AS latest_requestor_rework_comment,
+                       (SELECT u_adb.full_name FROM approvals_log al_adb
+                         LEFT JOIN users u_adb ON u_adb.user_id = al_adb.reviewer_id
+                         WHERE al_adb.task_id = wt.task_id
+                         ORDER BY al_adb.log_id DESC LIMIT 1) AS latest_action_done_by_name
                 FROM work_tasks wt
                 LEFT JOIN users             u   ON u.user_id              = wt.assigned_to
                 LEFT JOIN granular_tasks    gt  ON gt.task_id             = wt.granular_task_id
                 LEFT JOIN task_types        tt  ON tt.task_type_id        = gt.task_type_id
                 LEFT JOIN campaigns         c   ON c.campaign_id          = wt.campaign_id
-                LEFT JOIN requirement_types rt  ON rt.requirement_type_id = c.requirement_type_id
                 LEFT JOIN users             req ON req.user_id            = c.requestor_id
                 WHERE c.requestor_id = :requestorId
                   AND wt.status NOT IN ('CANCELLED')
@@ -243,6 +249,37 @@ public class CollaboratorRepository {
                 .designationName(rs.getString("designation_name"))
                 .addedAt(toLocalDateTime(rs, "added_at"))
                 .build();
+    }
+
+    /**
+     * Counts active collaborations visible to the given user in a single query.
+     * A collaboration is "active" when is_collaboration_started = 1 AND
+     * is_collaboration_active = 1.  The user sees a task if they are:
+     *   - the assigned worker, OR
+     *   - listed in task_collaborators, OR
+     *   - the campaign's requestor
+     * (Admins/managers get the same count via the collaborator row that is
+     * auto-inserted when collaboration starts, so they aren't under-counted.)
+     */
+    public int countActiveForUser(int userId) {
+        String sql = """
+                SELECT COUNT(DISTINCT wt.task_id)
+                FROM work_tasks wt
+                LEFT JOIN campaigns c ON c.campaign_id = wt.campaign_id
+                WHERE wt.is_collaboration_started = 1
+                  AND wt.is_collaboration_active  = 1
+                  AND wt.status NOT IN ('CANCELLED','COMPLETED')
+                  AND (
+                      wt.assigned_to = :userId
+                      OR EXISTS (
+                          SELECT 1 FROM task_collaborators tc
+                          WHERE tc.task_id = wt.task_id AND tc.user_id = :userId
+                      )
+                      OR c.requestor_id = :userId
+                  )
+                """;
+        Integer count = jdbc.queryForObject(sql, Map.of("userId", userId), Integer.class);
+        return count != null ? count : 0;
     }
 
     /** Add a single collaborator (idempotent — uses INSERT IGNORE). */
@@ -277,7 +314,6 @@ public class CollaboratorRepository {
                        c.priority    AS campaign_priority,
                        c.status      AS campaign_status,
                        c.requestor_id AS requestor_id,
-                       rt.requirement_name,
                        req.full_name AS requestor_name,
                        (SELECT COUNT(*) FROM approvals_log al
                          WHERE al.task_id = wt.task_id
@@ -292,13 +328,16 @@ public class CollaboratorRepository {
                        (SELECT al.comments FROM approvals_log al
                          WHERE al.task_id = wt.task_id
                            AND al.action_taken = 'REQUESTOR_REWORK'
-                         ORDER BY al.created_at DESC LIMIT 1) AS latest_requestor_rework_comment
+                         ORDER BY al.created_at DESC LIMIT 1) AS latest_requestor_rework_comment,
+                       (SELECT u_adb.full_name FROM approvals_log al_adb
+                         LEFT JOIN users u_adb ON u_adb.user_id = al_adb.reviewer_id
+                         WHERE al_adb.task_id = wt.task_id
+                         ORDER BY al_adb.log_id DESC LIMIT 1) AS latest_action_done_by_name
                 FROM work_tasks wt
                 LEFT JOIN users             u   ON u.user_id              = wt.assigned_to
                 LEFT JOIN granular_tasks    gt  ON gt.task_id             = wt.granular_task_id
                 LEFT JOIN task_types        tt  ON tt.task_type_id        = gt.task_type_id
                 LEFT JOIN campaigns         c   ON c.campaign_id          = wt.campaign_id
-                LEFT JOIN requirement_types rt  ON rt.requirement_type_id = c.requirement_type_id
                 LEFT JOIN users             req ON req.user_id            = c.requestor_id
                 WHERE wt.status IN ('IN_PROGRESS','REWORK')
                   AND EXISTS (SELECT 1 FROM task_collaborators tc WHERE tc.task_id = wt.task_id)
@@ -329,7 +368,6 @@ public class CollaboratorRepository {
                        c.priority    AS campaign_priority,
                        c.status      AS campaign_status,
                        c.requestor_id AS requestor_id,
-                       rt.requirement_name,
                        req.full_name AS requestor_name,
                        (SELECT COUNT(*) FROM approvals_log al
                          WHERE al.task_id = wt.task_id
@@ -344,13 +382,16 @@ public class CollaboratorRepository {
                        (SELECT al.comments FROM approvals_log al
                          WHERE al.task_id = wt.task_id
                            AND al.action_taken = 'REQUESTOR_REWORK'
-                         ORDER BY al.created_at DESC LIMIT 1) AS latest_requestor_rework_comment
+                         ORDER BY al.created_at DESC LIMIT 1) AS latest_requestor_rework_comment,
+                       (SELECT u_adb.full_name FROM approvals_log al_adb
+                         LEFT JOIN users u_adb ON u_adb.user_id = al_adb.reviewer_id
+                         WHERE al_adb.task_id = wt.task_id
+                         ORDER BY al_adb.log_id DESC LIMIT 1) AS latest_action_done_by_name
                 FROM work_tasks wt
                 LEFT JOIN users             u   ON u.user_id              = wt.assigned_to
                 LEFT JOIN granular_tasks    gt  ON gt.task_id             = wt.granular_task_id
                 LEFT JOIN task_types        tt  ON tt.task_type_id        = gt.task_type_id
                 LEFT JOIN campaigns         c   ON c.campaign_id          = wt.campaign_id
-                LEFT JOIN requirement_types rt  ON rt.requirement_type_id = c.requirement_type_id
                 LEFT JOIN users             req ON req.user_id            = c.requestor_id
                 WHERE wt.status NOT IN ('CANCELLED')
                   AND EXISTS (SELECT 1 FROM task_collaborators tc WHERE tc.task_id = wt.task_id)
@@ -386,11 +427,11 @@ public class CollaboratorRepository {
                 .requestorReworkCount(getNullableInt(rs, "requestor_rework_count"))
                 .latestManagerReworkComment(rs.getString("latest_manager_rework_comment"))
                 .latestRequestorReworkComment(rs.getString("latest_requestor_rework_comment"))
+                .latestActionDoneByName(rs.getString("latest_action_done_by_name"))
                 .campaignDeadline(rs.getDate("campaign_deadline") == null ? null
                         : rs.getDate("campaign_deadline").toLocalDate())
                 .campaignPriority(safeEnum(Priority.class, rs.getString("campaign_priority")))
                 .campaignStatus(safeEnum(CampaignStatus.class, rs.getString("campaign_status")))
-                .requirementTypeName(rs.getString("requirement_name"))
                 .requestorName(rs.getString("requestor_name"))
                 .build();
     }
