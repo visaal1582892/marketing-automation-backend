@@ -1,7 +1,8 @@
 -- =============================================================================
---  V1 – Complete Baseline Schema (consolidated from former V1–V7 + new tables)
---  Single source of truth for the entire database structure.
---  Run once on a fresh database; all statements are idempotent (IF NOT EXISTS).
+--  V1 – Complete Baseline Schema (single source of truth)
+--  All incremental V3-V8 changes are baked in here so a fresh database
+--  requires only this file + V2 (seed data). All statements use
+--  IF NOT EXISTS / IF EXISTS to remain idempotent.
 -- =============================================================================
 
 SET FOREIGN_KEY_CHECKS = 0;
@@ -149,7 +150,7 @@ CREATE TABLE IF NOT EXISTS role_task_mapping (
 ) ENGINE=InnoDB;
 
 -- =============================================================================
--- USERS  (no role_id column — roles are in user_roles junction table)
+-- USERS
 -- =============================================================================
 
 CREATE TABLE IF NOT EXISTS users (
@@ -181,6 +182,7 @@ CREATE TABLE IF NOT EXISTS user_roles (
 
 -- =============================================================================
 -- CAMPAIGNS
+-- requirement_type_id removed (replaced by task_type_id JSON array — V5+V7).
 -- =============================================================================
 
 CREATE TABLE IF NOT EXISTS campaigns (
@@ -189,7 +191,7 @@ CREATE TABLE IF NOT EXISTS campaigns (
     department_id             VARCHAR(20),
     target_location           TEXT,
     business_objective        VARCHAR(200),
-    requirement_type_id       VARCHAR(200),
+    task_type_id              VARCHAR(500)               NULL,
     audience_type_id          VARCHAR(500),
     language                  VARCHAR(500),
     has_offer                 VARCHAR(3)                 NOT NULL DEFAULT 'NO',
@@ -237,9 +239,9 @@ CREATE TABLE IF NOT EXISTS campaign_deliverables (
 
 -- =============================================================================
 -- WORK TASKS
--- No asset_url (replaced by asset_info table).
--- No worker_comment (replaced by worker_comments table).
--- Includes pre_hold_status to restore status after unhold.
+-- collaboration_chat_paused removed; replaced by two precise flags (V3+V4).
+-- is_collaboration_started: sticky flag set when worker clicks "Collaborate".
+-- is_collaboration_active:  true when chat/uploads are currently open.
 -- =============================================================================
 
 CREATE TABLE IF NOT EXISTS work_tasks (
@@ -262,6 +264,8 @@ CREATE TABLE IF NOT EXISTS work_tasks (
     dynamic_deadline           TIMESTAMP     NULL,
     submission_notes           TEXT,
     rework_count               INT           DEFAULT 0,
+    is_collaboration_started   BOOLEAN       NOT NULL DEFAULT FALSE,
+    is_collaboration_active    BOOLEAN       NOT NULL DEFAULT FALSE,
     created_at                 TIMESTAMP     DEFAULT CURRENT_TIMESTAMP,
     updated_at                 TIMESTAMP     DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     CONSTRAINT fk_wt_campaign  FOREIGN KEY (campaign_id)      REFERENCES campaigns(campaign_id)   ON DELETE CASCADE,
@@ -270,9 +274,7 @@ CREATE TABLE IF NOT EXISTS work_tasks (
 ) ENGINE=InnoDB;
 
 -- =============================================================================
--- WORKER COMMENTS  (replaces work_tasks.worker_comment column)
--- Workers raise comments to flag blockers; requestors answer them.
--- Only active (unanswered) comments are shown in the task UI.
+-- WORKER COMMENTS
 -- =============================================================================
 
 CREATE TABLE IF NOT EXISTS worker_comments (
@@ -320,14 +322,15 @@ CREATE TABLE IF NOT EXISTS work_task_answers (
 ) ENGINE=InnoDB;
 
 -- =============================================================================
--- APPROVALS LOG  (no campaign_id column — derive via work_tasks)
+-- APPROVALS LOG
+-- action_taken ENUM includes HELD and UNHOLD (V8).
 -- =============================================================================
 
 CREATE TABLE IF NOT EXISTS approvals_log (
     log_id        INT          NOT NULL AUTO_INCREMENT PRIMARY KEY,
     task_id       VARCHAR(20)  NOT NULL,
     reviewer_id   INT          NOT NULL,
-    action_taken  ENUM('APPROVED','NEEDS_REWORK','REJECTED','REQUESTOR_REWORK') NOT NULL,
+    action_taken  ENUM('APPROVED','NEEDS_REWORK','REJECTED','REQUESTOR_REWORK','HELD','UNHOLD') NOT NULL,
     comments      TEXT,
     created_at    TIMESTAMP    DEFAULT CURRENT_TIMESTAMP,
     CONSTRAINT fk_al_task     FOREIGN KEY (task_id)     REFERENCES work_tasks(task_id)  ON DELETE CASCADE,
@@ -379,7 +382,7 @@ CREATE TABLE IF NOT EXISTS lead_quality_metrics (
 ) ENGINE=InnoDB;
 
 -- =============================================================================
--- TASK COLLABORATORS  (tracks who was invited to collaborate)
+-- TASK COLLABORATORS
 -- =============================================================================
 
 CREATE TABLE IF NOT EXISTS task_collaborators (
@@ -393,7 +396,7 @@ CREATE TABLE IF NOT EXISTS task_collaborators (
 ) ENGINE=InnoDB;
 
 -- =============================================================================
--- TASK MESSAGES  (per-task real-time chat log)
+-- TASK MESSAGES
 -- =============================================================================
 
 CREATE TABLE IF NOT EXISTS task_messages (
@@ -408,9 +411,7 @@ CREATE TABLE IF NOT EXISTS task_messages (
 ) ENGINE=InnoDB;
 
 -- =============================================================================
--- ASSET INFO  (replaces work_tasks.asset_url)
--- Tracks all assets uploaded by workers and collaborators.
--- original_filename stores the user-facing filename separate from the stored UUID name.
+-- ASSET INFO
 -- =============================================================================
 
 CREATE TABLE IF NOT EXISTS asset_info (
