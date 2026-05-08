@@ -1,19 +1,73 @@
-2026-05-07 15:03:48.631  INFO [background-preinit] org.hibernate.validator.internal.util.Version      : HV000001: Hibernate Validator 9.0.1.Final
-2026-05-07 15:03:48.711  INFO [main] c.m.m.MarketingAutomationBackendApplicationTests   : Starting MarketingAutomationBackendApplicationTests using Java 25.0.3 with PID 29200 (started by Medplus in d:\RohitWorkspace\prod\marketing-automation\marketing-automation-backend)
-2026-05-07 15:03:48.714 DEBUG [main] c.m.m.MarketingAutomationBackendApplicationTests   : Running with Spring Boot v4.0.5, Spring v7.0.6
-2026-05-07 15:03:48.716  INFO [main] c.m.m.MarketingAutomationBackendApplicationTests   : No active profile set, falling back to 1 default profile: "default"
-2026-05-07 15:03:51.140  INFO [main] o.s.d.r.config.RepositoryConfigurationDelegate     : Bootstrapping Spring Data JDBC repositories in DEFAULT mode.
-2026-05-07 15:03:51.243  INFO [main] o.s.d.r.config.RepositoryConfigurationDelegate     : Finished Spring Data repository scanning in 85 ms. Found 0 JDBC repository interfaces.
-2026-05-07 15:03:54.049  INFO [main] $InitializeAuthenticationProviderManagerConfigurer : Global AuthenticationManager configured with AuthenticationProvider bean with name authenticationProvider
-2026-05-07 15:03:54.050  WARN [main] rConfigurer$InitializeUserDetailsManagerConfigurer : Global AuthenticationManager configured with an AuthenticationProvider bean. UserDetailsService beans will not be used by Spring Security for automatically configuring username/password login. Consider removing the AuthenticationProvider bean. Alternatively, consider using the UserDetailsService in a manually instantiated DaoAuthenticationProvider. If the current configuration is intentional, to turn off this warning, increase the logging level of 'org.springframework.security.config.annotation.authentication.configuration.InitializeUserDetailsBeanManagerConfigurer' to ERROR
-2026-05-07 15:03:56.115  INFO [main] o.s.m.simp.broker.SimpleBrokerMessageHandler       : Starting...
-2026-05-07 15:03:56.116  INFO [main] o.s.m.simp.broker.SimpleBrokerMessageHandler       : BrokerAvailabilityEvent[available=true, SimpleBrokerMessageHandler [org.springframework.messaging.simp.broker.DefaultSubscriptionRegistry@594fcb22]]
-2026-05-07 15:03:56.119  INFO [main] o.s.m.simp.broker.SimpleBrokerMessageHandler       : Started.
-2026-05-07 15:03:56.131  INFO [main] c.m.m.MarketingAutomationBackendApplicationTests   : Started MarketingAutomationBackendApplicationTests in 8.433 seconds (process running for 11.9)
-2026-05-07 15:03:56.237  INFO [main] c.m.m.config.FlywaySchemaRepairRunner              : FlywaySchemaRepairRunner: task_type_id column already exists on campaigns table.
-2026-05-07 15:03:56.282  INFO [main] c.m.m.config.FlywaySchemaRepairRunner              : FlywaySchemaRepairRunner: approvals_log action_taken ENUM extended (HELD/UNHOLD).
-2026-05-07 15:03:56.303  INFO [main] c.m.m.config.DataInitializer                       : Default admin user already exists (admin@medplus.com)
-2026-05-07 15:03:56.309  INFO [main] c.m.m.config.ActiveTaskCountReconciler             : ActiveTaskCountReconciler: realigned current_active_tasks for 45 user row(s).
-2026-05-07 15:03:58.396  INFO [SpringApplicationShutdownHook] o.s.m.simp.broker.SimpleBrokerMessageHandler       : Stopping...
-2026-05-07 15:03:58.397  INFO [SpringApplicationShutdownHook] o.s.m.simp.broker.SimpleBrokerMessageHandler       : BrokerAvailabilityEvent[available=false, SimpleBrokerMessageHandler [org.springframework.messaging.simp.broker.DefaultSubscriptionRegistry@594fcb22]]
-2026-05-07 15:03:58.397  INFO [SpringApplicationShutdownHook] o.s.m.simp.broker.SimpleBrokerMessageHandler       : Stopped.
+2026-05-08 07:14:35.210  INFO [background-preinit] org.hibernate.validator.internal.util.Version      : HV000001: Hibernate Validator 9.0.1.Final
+2026-05-08 07:14:35.361  INFO [main] c.m.m.MarketingAutomationBackendApplicationTests   : Starting MarketingAutomationBackendApplicationTests using Java 25.0.3 with PID 22104 (started by Medplus in d:\RohitWorkspace\prod\marketing-automation\marketing-automation-backend)
+2026-05-08 07:14:35.363 DEBUG [main] c.m.m.MarketingAutomationBackendApplicationTests   : Running with Spring Boot v4.0.5, Spring v7.0.6
+2026-05-08 07:14:35.365  INFO [main] c.m.m.MarketingAutomationBackendApplicationTests   : No active profile set, falling back to 1 default profile: "default"
+2026-05-08 07:14:38.144  INFO [main] o.s.d.r.config.RepositoryConfigurationDelegate     : Bootstrapping Spring Data JDBC repositories in DEFAULT mode.
+2026-05-08 07:14:38.241  INFO [main] o.s.d.r.config.RepositoryConfigurationDelegate     : Finished Spring Data repository scanning in 65 ms. Found 0 JDBC repository interfaces.
+2026-05-08 07:14:41.635  INFO [main] $InitializeAuthenticationProviderManagerConfigurer : Global AuthenticationManager configured with AuthenticationProvider bean with name authenticationProvider
+2026-05-08 07:14:41.636  WARN [main] rConfigurer$InitializeUserDetailsManagerConfigurer : Global AuthenticationManager configured with an AuthenticationProvider bean. UserDetailsService beans will not be used by Spring Security for automatically configuring username/password login. Consider removing the AuthenticationProvider bean. Alternatively, consider using the UserDetailsService in a manually instantiated DaoAuthenticationProvider. If the current configuration is intentional, to turn off this warning, increase the logging level of 'org.springframework.security.config.annotation.authentication.configuration.InitializeUserDetailsBeanManagerConfigurer' to ERROR
+2026-05-08 07:14:44.017  INFO [main] o.s.m.simp.broker.SimpleBrokerMessageHandler       : Starting...
+2026-05-08 07:14:44.020  INFO [main] o.s.m.simp.broker.SimpleBrokerMessageHandler       : BrokerAvailabilityEvent[available=true, SimpleBrokerMessageHandler [org.springframework.messaging.simp.broker.DefaultSubscriptionRegistry@170f0fd6]]
+2026-05-08 07:14:44.022  INFO [main] o.s.m.simp.broker.SimpleBrokerMessageHandler       : Started.
+2026-05-08 07:14:44.034  INFO [main] c.m.m.MarketingAutomationBackendApplicationTests   : Started MarketingAutomationBackendApplicationTests in 9.709 seconds (process running for 12.575)
+2026-05-08 07:14:44.144  INFO [main] c.m.m.config.FlywaySchemaRepairRunner              : FlywaySchemaRepairRunner: task_type_id column already exists on campaigns table.
+2026-05-08 07:14:44.200  INFO [main] c.m.m.config.FlywaySchemaRepairRunner              : FlywaySchemaRepairRunner: approvals_log action_taken ENUM extended (HELD/UNHOLD).
+2026-05-08 07:14:44.225  INFO [main] c.m.m.config.DataInitializer                       : Default admin user already exists (admin@medplus.com)
+2026-05-08 07:14:44.233  INFO [main] c.m.m.config.ActiveTaskCountReconciler             : ActiveTaskCountReconciler: realigned current_active_tasks for 45 user row(s).
+2026-05-08 07:14:46.024  INFO [SpringApplicationShutdownHook] o.s.m.simp.broker.SimpleBrokerMessageHandler       : Stopping...
+2026-05-08 07:14:46.025  INFO [SpringApplicationShutdownHook] o.s.m.simp.broker.SimpleBrokerMessageHandler       : BrokerAvailabilityEvent[available=false, SimpleBrokerMessageHandler [org.springframework.messaging.simp.broker.DefaultSubscriptionRegistry@170f0fd6]]
+2026-05-08 07:14:46.027  INFO [SpringApplicationShutdownHook] o.s.m.simp.broker.SimpleBrokerMessageHandler       : Stopped.
+2026-05-08 07:17:56.216  INFO [background-preinit] org.hibernate.validator.internal.util.Version      : HV000001: Hibernate Validator 9.0.1.Final
+2026-05-08 07:17:56.325  INFO [main] c.m.m.MarketingAutomationBackendApplication        : Starting MarketingAutomationBackendApplication v0.0.1-SNAPSHOT using Java 25.0.3 with PID 28212 (D:\RohitWorkspace\prod\marketing-automation\marketing-automation-backend\target\marketing-automation-backend-0.0.1-SNAPSHOT.jar started by Medplus in d:\RohitWorkspace\prod\marketing-automation\marketing-automation-backend)
+2026-05-08 07:17:56.327 DEBUG [main] c.m.m.MarketingAutomationBackendApplication        : Running with Spring Boot v4.0.5, Spring v7.0.6
+2026-05-08 07:17:56.329  INFO [main] c.m.m.MarketingAutomationBackendApplication        : No active profile set, falling back to 1 default profile: "default"
+2026-05-08 07:17:58.432  INFO [main] o.s.d.r.config.RepositoryConfigurationDelegate     : Bootstrapping Spring Data JDBC repositories in DEFAULT mode.
+2026-05-08 07:17:58.491  INFO [main] o.s.d.r.config.RepositoryConfigurationDelegate     : Finished Spring Data repository scanning in 46 ms. Found 0 JDBC repository interfaces.
+2026-05-08 07:18:00.072  INFO [main] org.springframework.boot.tomcat.TomcatWebServer    : Tomcat initialized with port 8080 (http)
+2026-05-08 07:18:00.109  INFO [main] org.apache.coyote.http11.Http11NioProtocol         : Initializing ProtocolHandler ["http-nio-0.0.0.0-8080"]
+2026-05-08 07:18:00.114  INFO [main] org.apache.catalina.core.StandardService           : Starting service [Tomcat]
+2026-05-08 07:18:00.115  INFO [main] org.apache.catalina.core.StandardEngine            : Starting Servlet engine: [Apache Tomcat/11.0.20]
+2026-05-08 07:18:00.208  INFO [main] o.s.b.w.c.s.WebApplicationContextInitializer       : Root WebApplicationContext: initialization completed in 3768 ms
+2026-05-08 07:18:00.576 DEBUG [main] c.m.m.security.JwtAuthenticationFilter             : Filter 'jwtAuthenticationFilter' configured for use
+2026-05-08 07:18:00.577 DEBUG [main] c.m.m.config.RequestLoggingFilter                  : Filter 'requestLoggingFilter' configured for use
+2026-05-08 07:18:02.928  INFO [main] $InitializeAuthenticationProviderManagerConfigurer : Global AuthenticationManager configured with AuthenticationProvider bean with name authenticationProvider
+2026-05-08 07:18:02.929  WARN [main] rConfigurer$InitializeUserDetailsManagerConfigurer : Global AuthenticationManager configured with an AuthenticationProvider bean. UserDetailsService beans will not be used by Spring Security for automatically configuring username/password login. Consider removing the AuthenticationProvider bean. Alternatively, consider using the UserDetailsService in a manually instantiated DaoAuthenticationProvider. If the current configuration is intentional, to turn off this warning, increase the logging level of 'org.springframework.security.config.annotation.authentication.configuration.InitializeUserDetailsBeanManagerConfigurer' to ERROR
+2026-05-08 07:18:05.220  INFO [main] o.s.m.simp.broker.SimpleBrokerMessageHandler       : Starting...
+2026-05-08 07:18:05.222  INFO [main] o.s.m.simp.broker.SimpleBrokerMessageHandler       : BrokerAvailabilityEvent[available=true, SimpleBrokerMessageHandler [org.springframework.messaging.simp.broker.DefaultSubscriptionRegistry@45375bdf]]
+2026-05-08 07:18:05.224  INFO [main] o.s.m.simp.broker.SimpleBrokerMessageHandler       : Started.
+2026-05-08 07:18:05.225  INFO [main] org.apache.coyote.http11.Http11NioProtocol         : Starting ProtocolHandler ["http-nio-0.0.0.0-8080"]
+2026-05-08 07:18:05.276  INFO [main] org.springframework.boot.tomcat.TomcatWebServer    : Tomcat started on port 8080 (http) with context path '/'
+2026-05-08 07:18:05.315  INFO [main] c.m.m.MarketingAutomationBackendApplication        : Started MarketingAutomationBackendApplication in 10.361 seconds (process running for 11.41)
+2026-05-08 07:18:05.398  INFO [main] c.m.m.config.FlywaySchemaRepairRunner              : FlywaySchemaRepairRunner: task_type_id column already exists on campaigns table.
+2026-05-08 07:18:05.430  INFO [main] c.m.m.config.FlywaySchemaRepairRunner              : FlywaySchemaRepairRunner: approvals_log action_taken ENUM extended (HELD/UNHOLD).
+2026-05-08 07:18:05.457  INFO [main] c.m.m.config.DataInitializer                       : Default admin user already exists (admin@medplus.com)
+2026-05-08 07:18:05.463  INFO [main] c.m.m.config.ActiveTaskCountReconciler             : ActiveTaskCountReconciler: realigned current_active_tasks for 45 user row(s).
+2026-05-08 07:18:59.656  INFO [http-nio-0.0.0.0-8080-exec-1] o.a.c.core.ContainerBase.[Tomcat].[localhost].[/]  : Initializing Spring DispatcherServlet 'dispatcherServlet'
+2026-05-08 07:18:59.657  INFO [http-nio-0.0.0.0-8080-exec-1] o.springframework.web.servlet.DispatcherServlet    : Initializing Servlet 'dispatcherServlet'
+2026-05-08 07:18:59.660  INFO [http-nio-0.0.0.0-8080-exec-1] o.springframework.web.servlet.DispatcherServlet    : Completed initialization in 2 ms
+2026-05-08 07:19:00.247  INFO [http-nio-0.0.0.0-8080-exec-1] c.m.m.service.AuthService                          : LOGIN attempt | email=rohit@medplus.com
+2026-05-08 07:19:00.910  INFO [http-nio-0.0.0.0-8080-exec-1] c.m.m.service.AuthService                          : LOGIN success | email=rohit@medplus.com userId=54 roles=[Admin, Requestor, Marketing Manager] designation=Dy. Manager
+2026-05-08 07:19:01.090  INFO [http-nio-0.0.0.0-8080-exec-1] c.m.m.config.RequestLoggingFilter                  : HTTP POST /api/auth/login → 200 | 1335ms | user=anonymous | ip=0:0:0:0:0:0:0:1
+2026-05-08 07:19:01.638  INFO [http-nio-0.0.0.0-8080-exec-2] c.m.m.config.RequestLoggingFilter                  : HTTP GET /api/collaborations/my → 200 | 279ms | user=rohit@medplus.com | ip=0:0:0:0:0:0:0:1
+2026-05-08 07:19:01.731  INFO [http-nio-0.0.0.0-8080-exec-3] c.m.m.config.RequestLoggingFilter                  : HTTP GET /api/collaborations/my → 200 | 73ms | user=rohit@medplus.com | ip=0:0:0:0:0:0:0:1
+2026-05-08 07:19:04.399  INFO [http-nio-0.0.0.0-8080-exec-4] c.m.m.config.RequestLoggingFilter                  : HTTP GET /api/campaigns → 200 | 159ms | user=rohit@medplus.com | ip=0:0:0:0:0:0:0:1
+2026-05-08 07:19:04.446  INFO [http-nio-0.0.0.0-8080-exec-5] c.m.m.config.RequestLoggingFilter                  : HTTP GET /api/manager/tasks/review → 200 | 205ms | user=rohit@medplus.com | ip=0:0:0:0:0:0:0:1
+2026-05-08 07:19:04.496  INFO [http-nio-0.0.0.0-8080-exec-6] c.m.m.config.RequestLoggingFilter                  : HTTP GET /api/manager/tasks/all → 200 | 255ms | user=rohit@medplus.com | ip=0:0:0:0:0:0:0:1
+2026-05-08 07:19:04.545  INFO [http-nio-0.0.0.0-8080-exec-8] c.m.m.config.RequestLoggingFilter                  : HTTP GET /api/manager/tasks/review → 200 | 52ms | user=rohit@medplus.com | ip=0:0:0:0:0:0:0:1
+2026-05-08 07:19:04.575  INFO [http-nio-0.0.0.0-8080-exec-9] c.m.m.config.RequestLoggingFilter                  : HTTP GET /api/manager/tasks/all → 200 | 44ms | user=rohit@medplus.com | ip=0:0:0:0:0:0:0:1
+2026-05-08 07:19:04.585  INFO [http-nio-0.0.0.0-8080-exec-4] c.m.m.config.RequestLoggingFilter                  : HTTP GET /api/campaigns → 200 | 108ms | user=rohit@medplus.com | ip=0:0:0:0:0:0:0:1
+2026-05-08 07:19:05.233  INFO [MessageBroker-1] o.s.web.socket.config.WebSocketMessageBrokerStats  : WebSocketSession[0 current WS(0)-HttpStream(0)-HttpPoll(0), 0 total, 0 closed abnormally (0 connect failure, 0 send limit, 0 transport error)], stompSubProtocol[processed CONNECT(0)-CONNECTED(0)-DISCONNECT(0)], stompBrokerRelay[null], inboundChannel[pool size = 0, active threads = 0, queued tasks = 0, completed tasks = 0], outboundChannel[pool size = 0, active threads = 0, queued tasks = 0, completed tasks = 0], sockJsScheduler[pool size = 1, active threads = 1, queued tasks = 0, completed tasks = 0]
+2026-05-08 07:19:06.552  INFO [http-nio-0.0.0.0-8080-exec-2] c.m.m.config.RequestLoggingFilter                  : HTTP GET /api/master/granular-tasks?includeInactive=false → 200 | 45ms | user=rohit@medplus.com | ip=0:0:0:0:0:0:0:1
+2026-05-08 07:19:06.561  INFO [http-nio-0.0.0.0-8080-exec-1] c.m.m.config.RequestLoggingFilter                  : HTTP GET /api/master/task-types?includeInactive=false → 200 | 51ms | user=rohit@medplus.com | ip=0:0:0:0:0:0:0:1
+2026-05-08 07:19:06.565  INFO [http-nio-0.0.0.0-8080-exec-7] c.m.m.config.RequestLoggingFilter                  : HTTP GET /api/manager/tasks/all?page=0&size=20&status=COMPLETED → 200 | 51ms | user=rohit@medplus.com | ip=0:0:0:0:0:0:0:1
+2026-05-08 07:19:06.580  INFO [http-nio-0.0.0.0-8080-exec-5] c.m.m.config.RequestLoggingFilter                  : HTTP GET /api/master/granular-tasks?includeInactive=false → 200 | 7ms | user=rohit@medplus.com | ip=0:0:0:0:0:0:0:1
+2026-05-08 07:19:06.590  INFO [http-nio-0.0.0.0-8080-exec-6] c.m.m.config.RequestLoggingFilter                  : HTTP GET /api/master/task-types?includeInactive=false → 200 | 10ms | user=rohit@medplus.com | ip=0:0:0:0:0:0:0:1
+2026-05-08 07:19:06.607  INFO [http-nio-0.0.0.0-8080-exec-8] c.m.m.config.RequestLoggingFilter                  : HTTP GET /api/manager/tasks/all?page=0&size=20&status=COMPLETED → 200 | 27ms | user=rohit@medplus.com | ip=0:0:0:0:0:0:0:1
+2026-05-08 07:19:14.162  INFO [http-nio-0.0.0.0-8080-exec-9] c.m.m.config.RequestLoggingFilter                  : HTTP GET /api/manager/tasks/all?page=0&size=20&status=COMPLETED → 200 | 47ms | user=rohit@medplus.com | ip=0:0:0:0:0:0:0:1
+2026-05-08 07:19:19.670  INFO [http-nio-0.0.0.0-8080-exec-4] c.m.m.config.RequestLoggingFilter                  : HTTP GET /api/manager/tasks/all?page=0&size=20 → 200 | 34ms | user=rohit@medplus.com | ip=0:0:0:0:0:0:0:1
+2026-05-08 07:19:19.729  INFO [http-nio-0.0.0.0-8080-exec-3] c.m.m.config.RequestLoggingFilter                  : HTTP GET /api/manager/tasks/all?page=0&size=20 → 200 | 23ms | user=rohit@medplus.com | ip=0:0:0:0:0:0:0:1
+2026-05-08 07:19:30.264  INFO [SpringApplicationShutdownHook] org.springframework.boot.tomcat.GracefulShutdown   : Commencing graceful shutdown. Waiting for active requests to complete
+2026-05-08 07:19:30.273  INFO [tomcat-shutdown] org.springframework.boot.tomcat.GracefulShutdown   : Graceful shutdown complete
+2026-05-08 07:19:30.277  INFO [SpringApplicationShutdownHook] o.s.m.simp.broker.SimpleBrokerMessageHandler       : Stopping...
+2026-05-08 07:19:30.277  INFO [SpringApplicationShutdownHook] o.s.m.simp.broker.SimpleBrokerMessageHandler       : BrokerAvailabilityEvent[available=false, SimpleBrokerMessageHandler [org.springframework.messaging.simp.broker.DefaultSubscriptionRegistry@45375bdf]]
+2026-05-08 07:19:30.279  INFO [SpringApplicationShutdownHook] o.s.m.simp.broker.SimpleBrokerMessageHandler       : Stopped.
