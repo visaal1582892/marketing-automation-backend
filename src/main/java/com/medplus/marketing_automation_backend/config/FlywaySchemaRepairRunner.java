@@ -269,13 +269,18 @@ public class FlywaySchemaRepairRunner implements CommandLineRunner {
     }
 
     /**
-     * Removes flyway_schema_history records whose migration files no longer exist
-     * on disk (V3 and V4). Keeping them as orphans can cause Flyway to mark
-     * subsequent migrations as "out of order" and skip them silently.
+     * Removes flyway_schema_history records whose migration FILES no longer exist
+     * on disk.  V3 and V4 were merged into V1; V5, V6, and V7 were also merged
+     * into V1 so their separate files have been deleted.  Keeping stale entries
+     * causes Flyway to flag subsequent migrations as "out of order" and skip them.
      */
     private void purgeOrphanedFlywayEntries() {
         try {
-            String[] orphanedVersions = {"3", "4"};
+            // V3, V4 – old collaboration migrations folded into V1.
+            // V5       – designations/regions timestamps folded into V1.
+            // V6       – auto_created_tasks folded into V1.
+            // V7       – qc_routing folded into V1.
+            String[] orphanedVersions = {"3", "4", "5", "6", "7"};
             for (String v : orphanedVersions) {
                 int deleted = jdbc.update(
                     "DELETE FROM flyway_schema_history WHERE version = ?", v);
@@ -289,8 +294,9 @@ public class FlywaySchemaRepairRunner implements CommandLineRunner {
     }
 
     /**
-     * Creates the auto_created_tasks table if it does not yet exist (V6 migration).
-     * Also registers it in flyway_schema_history so Flyway does not try to re-run V6.
+     * Creates the auto_created_tasks table if it does not yet exist.
+     * This is a safety net for existing databases that were deployed before
+     * this table was added to V1__complete_schema.sql.
      */
     private void ensureAutoCreatedTasksTable() {
         try {
@@ -313,17 +319,16 @@ public class FlywaySchemaRepairRunner implements CommandLineRunner {
                     + "  CONSTRAINT fk_auto_created_source FOREIGN KEY (source_task_id)  REFERENCES work_tasks(task_id) ON DELETE CASCADE,"
                     + "  CONSTRAINT fk_auto_created_child  FOREIGN KEY (created_task_id) REFERENCES work_tasks(task_id) ON DELETE CASCADE"
                     + ") ENGINE=InnoDB");
-                log.info("FlywaySchemaRepairRunner: auto_created_tasks table created.");
+                log.info("FlywaySchemaRepairRunner: auto_created_tasks table created (safety net).");
             }
-            registerFlywayEntry(6, "6", "auto created tasks", "V6__auto_created_tasks.sql");
         } catch (Exception e) {
             log.error("FlywaySchemaRepairRunner: ensureAutoCreatedTasksTable failed — {}", e.getMessage());
         }
     }
 
     /**
-     * Creates the qc_routing table if it does not yet exist (V7 migration).
-     * Also registers it in flyway_schema_history so Flyway does not try to re-run V7.
+     * Creates the qc_routing table if it does not yet exist.
+     * Safety net for existing databases deployed before this table was in V1.
      */
     private void ensureQcRoutingTable() {
         try {
@@ -337,33 +342,10 @@ public class FlywaySchemaRepairRunner implements CommandLineRunner {
                     + "  CONSTRAINT fk_qcr_worker  FOREIGN KEY (worker_role_id)  REFERENCES roles(role_id),"
                     + "  CONSTRAINT fk_qcr_manager FOREIGN KEY (manager_role_id) REFERENCES roles(role_id)"
                     + ") ENGINE=InnoDB");
-                log.info("FlywaySchemaRepairRunner: qc_routing table created.");
+                log.info("FlywaySchemaRepairRunner: qc_routing table created (safety net).");
             }
-            registerFlywayEntry(7, "7", "qc routing", "V7__qc_routing.sql");
         } catch (Exception e) {
             log.error("FlywaySchemaRepairRunner: ensureQcRoutingTable failed — {}", e.getMessage());
-        }
-    }
-
-    /**
-     * Inserts a Flyway history record (success=1) if that version is not already present.
-     * Prevents Flyway from trying to re-run a migration that was applied by this runner.
-     */
-    private void registerFlywayEntry(int rank, String version, String description, String script) {
-        try {
-            Integer exists = jdbc.queryForObject(
-                "SELECT COUNT(*) FROM flyway_schema_history WHERE version = ?",
-                Integer.class, version);
-            if (exists == null || exists == 0) {
-                jdbc.update(
-                    "INSERT INTO flyway_schema_history "
-                    + "(installed_rank, version, description, type, script, checksum, installed_by, installed_on, execution_time, success) "
-                    + "VALUES (?, ?, ?, 'SQL', ?, 0, 'repair-runner', NOW(), 0, 1)",
-                    rank, version, description, script);
-                log.info("FlywaySchemaRepairRunner: registered V{} ({}) in flyway_schema_history.", version, script);
-            }
-        } catch (Exception e) {
-            log.warn("FlywaySchemaRepairRunner: could not register V{} in flyway_schema_history — {}", version, e.getMessage());
         }
     }
 

@@ -1,8 +1,9 @@
 -- =============================================================================
 --  V1 – Complete Baseline Schema (single source of truth)
---  All incremental V3-V8 changes are baked in here so a fresh database
---  requires only this file + V2 (seed data). All statements use
---  IF NOT EXISTS / IF EXISTS to remain idempotent.
+--  ALL schema changes are baked in here so a fresh database requires only
+--  this file + V2 (seed data).  All statements use IF NOT EXISTS / IF EXISTS
+--  to remain idempotent.  V3-V7 are intentionally absent as separate files;
+--  their content lives here.
 -- =============================================================================
 
 SET FOREIGN_KEY_CHECKS = 0;
@@ -465,6 +466,41 @@ CREATE TABLE IF NOT EXISTS asset_info (
     created_at        TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
     CONSTRAINT fk_ai_task FOREIGN KEY (task_id) REFERENCES work_tasks(task_id) ON DELETE CASCADE,
     CONSTRAINT fk_ai_user FOREIGN KEY (user_id) REFERENCES users(user_id)
+) ENGINE=InnoDB;
+
+-- =============================================================================
+-- AUTO-CREATED TASKS  (designer → content-writer handoff)
+-- =============================================================================
+
+CREATE TABLE IF NOT EXISTS auto_created_tasks (
+    auto_created_task_id     BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+    source_task_id           VARCHAR(32)     NOT NULL,
+    created_task_id          VARCHAR(32)     NOT NULL,
+    campaign_id              INT             NOT NULL,
+    source_granular_task_id  VARCHAR(20)     NULL,
+    content_granular_task_id VARCHAR(20)     NOT NULL,
+    requested_by_user_id     INT UNSIGNED    NOT NULL,
+    content_assignee_user_id INT UNSIGNED    NULL,
+    status                   ENUM('REQUESTED','IN_PROGRESS','COMPLETED','CANCELLED') NOT NULL DEFAULT 'REQUESTED',
+    created_at               TIMESTAMP       NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at               TIMESTAMP       NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    UNIQUE KEY uk_auto_created_source (source_task_id),
+    UNIQUE KEY uk_auto_created_child  (created_task_id),
+    CONSTRAINT fk_auto_created_source FOREIGN KEY (source_task_id)  REFERENCES work_tasks(task_id) ON DELETE CASCADE,
+    CONSTRAINT fk_auto_created_child  FOREIGN KEY (created_task_id) REFERENCES work_tasks(task_id) ON DELETE CASCADE
+) ENGINE=InnoDB;
+
+-- =============================================================================
+-- QC ROUTING  (maps worker roles to manager roles for QC queue filtering)
+-- =============================================================================
+
+CREATE TABLE IF NOT EXISTS qc_routing (
+    id              INT          NOT NULL AUTO_INCREMENT PRIMARY KEY,
+    worker_role_id  VARCHAR(20)  NOT NULL,
+    manager_role_id VARCHAR(20)  NOT NULL,
+    UNIQUE KEY uq_qc_routing (worker_role_id, manager_role_id),
+    CONSTRAINT fk_qcr_worker  FOREIGN KEY (worker_role_id)  REFERENCES roles(role_id),
+    CONSTRAINT fk_qcr_manager FOREIGN KEY (manager_role_id) REFERENCES roles(role_id)
 ) ENGINE=InnoDB;
 
 SET FOREIGN_KEY_CHECKS = 1;
