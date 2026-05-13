@@ -14,6 +14,7 @@ import com.medplus.marketing_automation_backend.exception.ResourceNotFoundExcept
 import com.medplus.marketing_automation_backend.domain.ApprovalLog;
 import com.medplus.marketing_automation_backend.enums.ApprovalAction;
 import com.medplus.marketing_automation_backend.repository.ApprovalLogRepository;
+import com.medplus.marketing_automation_backend.repository.AutoCreatedTaskRepository;
 import com.medplus.marketing_automation_backend.repository.CampaignBookmarkRepository;
 import com.medplus.marketing_automation_backend.repository.CampaignRepository;
 import com.medplus.marketing_automation_backend.repository.UserRepository;
@@ -45,6 +46,8 @@ public class CampaignService {
     private final CampaignBookmarkRepository bookmarkRepo;
     private final WorkerCommentRepository    workerCommentRepo;
     private final ApprovalLogRepository      approvalLogRepo;
+    private final AutoCreatedTaskRepository  autoCreatedTaskRepo;
+    private final AutoCreatedTaskService     autoCreatedTaskService;
 
     public CampaignService(CampaignRepository campaignRepo,
                            WorkTaskRepository workTaskRepo,
@@ -54,7 +57,9 @@ public class CampaignService {
                            MasterDataService masterDataService,
                            CampaignBookmarkRepository bookmarkRepo,
                            WorkerCommentRepository workerCommentRepo,
-                           ApprovalLogRepository approvalLogRepo) {
+                           ApprovalLogRepository approvalLogRepo,
+                           AutoCreatedTaskRepository autoCreatedTaskRepo,
+                           AutoCreatedTaskService autoCreatedTaskService) {
         this.campaignRepo          = campaignRepo;
         this.workTaskRepo          = workTaskRepo;
         this.userRepo              = userRepo;
@@ -64,6 +69,8 @@ public class CampaignService {
         this.bookmarkRepo          = bookmarkRepo;
         this.workerCommentRepo     = workerCommentRepo;
         this.approvalLogRepo       = approvalLogRepo;
+        this.autoCreatedTaskRepo   = autoCreatedTaskRepo;
+        this.autoCreatedTaskService = autoCreatedTaskService;
     }
 
     // -------------------------------------------------------------------------
@@ -178,12 +185,14 @@ public class CampaignService {
     public CampaignResponse getDetail(int campaignId) {
         Campaign c = campaignRepo.findById(campaignId)
                 .orElseThrow(() -> new ResourceNotFoundException("Campaign not found: " + campaignId));
-        return toDetailResponse(c);
+        return toDetailResponse(c, null);
     }
 
     /** Detail with bookmark flag enriched for the given viewer. */
     public CampaignResponse getDetail(int campaignId, int viewerUserId) {
-        CampaignResponse r = getDetail(campaignId);
+        Campaign c = campaignRepo.findById(campaignId)
+                .orElseThrow(() -> new ResourceNotFoundException("Campaign not found: " + campaignId));
+        CampaignResponse r = toDetailResponse(c, viewerUserId);
         r.setBookmarked(bookmarkRepo.isBookmarked(viewerUserId, campaignId));
         return r;
     }
@@ -208,12 +217,13 @@ public class CampaignService {
     public PagedResponse<CampaignResponse> listMyPaged(
             int requestorId,
             String campaignId, String status, String priority,
+            String taskType,
             LocalDate dateFrom, LocalDate dateTo,
             int page, int size) {
 
         Set<Integer> bookmarked = bookmarkRepo.findBookmarkedCampaignIds(requestorId);
         PagedResponse<Campaign> raw = campaignRepo.findByRequestorIdPaged(
-                requestorId, campaignId, status, priority, dateFrom, dateTo, page, size);
+                requestorId, campaignId, status, priority, taskType, dateFrom, dateTo, page, size);
 
         List<CampaignResponse> mapped = raw.content().stream()
                 .map(c -> {
@@ -776,12 +786,22 @@ public class CampaignService {
     // Mapping helpers
     // -------------------------------------------------------------------------
 
-    private CampaignResponse toDetailResponse(Campaign c) {
+    private CampaignResponse toDetailResponse(Campaign c, Integer viewerUserId) {
         int cid = c.getCampaignId();
         Map<String, List<WorkTaskQuestionnaireBriefItem>> qaByTask =
                 questionnaireService.questionnaireBriefByWorkTaskForCampaign(cid);
-        List<WorkTaskResponse> workTasks = workTaskRepo.findByCampaignId(cid)
-                .stream()
+        List<WorkTask> allTasks = workTaskRepo.findByCampaignId(cid);
+        java.util.Set<String> hiddenTaskIds = shouldHideAutoCreatedChildren(c, viewerUserId)
+                ? autoCreatedTaskRepo.findByCampaignId(cid).stream()
+                .map(a -> a.getCreatedTaskId())
+                .collect(Collectors.toSet())
+                : Collections.emptySet();
+
+        List<WorkTask> visibleTasks = allTasks.stream()
+                .filter(wt -> !hiddenTaskIds.contains(wt.getTaskId()))
+                .collect(Collectors.toList());
+
+        List<WorkTaskResponse> workTasks = visibleTasks.stream()
                 .map(wt -> {
                     WorkTaskResponse r = toWorkTaskResponse(wt);
                     r.setQuestionnaire(qaByTask.getOrDefault(wt.getTaskId(), Collections.emptyList()));
@@ -789,8 +809,10 @@ public class CampaignService {
                     return r;
                 })
                 .collect(Collectors.toList());
+        workTasks = autoCreatedTaskService.enrichAll(workTasks);
         // Build a map granularTaskId → workTaskStatus for enriching deliverables
-        Map<String, String> statusByGranularTask = workTaskRepo.findByCampaignId(cid).stream()
+        Map<String, String> statusByGranularTask = visibleTasks.stream()
+                .filter(wt -> wt.getGranularTaskId() != null && wt.getStatus() != null)
                 .collect(Collectors.toMap(
                         wt -> wt.getGranularTaskId(),
                         wt -> wt.getStatus().name(),
@@ -807,6 +829,16 @@ public class CampaignService {
         resp.setFileUrls(fileUrls);
         resp.setFileOriginalNames(fileOriginalNames);
         return resp;
+    }
+
+    private boolean shouldHideAutoCreatedChildren(Campaign campaign, Integer viewerUserId) {
+        if (viewerUserId == null || campaign.getRequestorId() == null
+                || campaign.getRequestorId().intValue() != viewerUserId) {
+            return false;
+        }
+        User viewer = userRepo.findById((long) viewerUserId).orElse(null);
+        if (viewer == null) return false;
+        return !viewer.hasRole("Marketing Manager") && !viewer.hasRole("Admin");
     }
 
     CampaignResponse toSummaryResponse(Campaign c) {

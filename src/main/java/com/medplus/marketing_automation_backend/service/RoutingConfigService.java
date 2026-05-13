@@ -2,6 +2,7 @@ package com.medplus.marketing_automation_backend.service;
 
 import com.medplus.marketing_automation_backend.domain.RoleTask;
 import com.medplus.marketing_automation_backend.domain.RoutingRule;
+import com.medplus.marketing_automation_backend.dto.PagedResponse;
 import com.medplus.marketing_automation_backend.enums.RecordStatus;
 import com.medplus.marketing_automation_backend.exception.BadRequestException;
 import com.medplus.marketing_automation_backend.exception.ResourceNotFoundException;
@@ -66,6 +67,11 @@ public class RoutingConfigService {
         return repo.findAllRoleTaskMappings();
     }
 
+    public PagedResponse<RoleTask> listRoleTaskMappingsPaged(String roleName, String taskName,
+                                                               String status, int page, int size) {
+        return repo.findAllRoleTaskMappingsPaged(roleName, taskName, status, page, size);
+    }
+
     public List<RoleTask> listRoleTaskMappingsByRole(String roleId) {
         return repo.findRoleTaskMappingsByRole(roleId);
     }
@@ -80,9 +86,11 @@ public class RoutingConfigService {
                 .orElseThrow();
     }
 
-    public RoleTask updateRoleTaskMapping(int mappingId, RecordStatus status) {
+    public RoleTask updateRoleTaskMapping(int mappingId, String roleId, String taskId, RecordStatus status) {
         if (status == null) throw new BadRequestException("status is required");
-        if (repo.updateRoleTaskStatus(mappingId, status) == 0) {
+        if (roleId == null || roleId.isBlank()) throw new BadRequestException("roleId is required");
+        if (taskId == null || taskId.isBlank()) throw new BadRequestException("taskId is required");
+        if (repo.updateRoleTaskMapping(mappingId, roleId, taskId, status) == 0) {
             throw new ResourceNotFoundException("Role-task mapping " + mappingId + " not found");
         }
         return repo.findRoleTaskMappingById(mappingId).orElseThrow();

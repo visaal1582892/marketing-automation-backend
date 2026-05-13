@@ -83,9 +83,24 @@ public class RoutingConfigController {
     // Admin-only: Role → Task
     // -------------------------------------------------------------------------
 
+    /**
+     * List role-task mappings.
+     * Without page/size: returns full list (backward compatible).
+     * With page/size: returns PagedResponse for the admin table.
+     */
     @GetMapping("/role-task")
     @PreAuthorize("hasRole('ADMIN')")
-    public List<RoleTask> listRoleTaskMappings() {
+    public Object listRoleTaskMappings(
+            @RequestParam(required = false) String roleName,
+            @RequestParam(required = false) String taskName,
+            @RequestParam(required = false) String status,
+            @RequestParam(required = false) Integer page,
+            @RequestParam(required = false) Integer size) {
+        if (page != null || size != null) {
+            return service.listRoleTaskMappingsPaged(roleName, taskName, status,
+                                                      page != null ? page : 0,
+                                                      size != null ? size : 20);
+        }
         return service.listRoleTaskMappings();
     }
 
@@ -108,7 +123,7 @@ public class RoutingConfigController {
             @PathVariable int mappingId,
             @RequestBody Map<String, String> body) {
         RecordStatus status = RecordStatus.valueOf(body.get("status"));
-        return service.updateRoleTaskMapping(mappingId, status);
+        return service.updateRoleTaskMapping(mappingId, body.get("roleId"), body.get("taskId"), status);
     }
 
     @DeleteMapping("/role-task/{mappingId}")

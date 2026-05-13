@@ -40,6 +40,15 @@ public class WorkTaskRepository {
 
     private static final String COUNT_BASE = "SELECT COUNT(*) " + FROM_JOINS;
 
+    /** Newest activity first; approval-log id breaks ties when timestamps match. */
+    private static final String ORDER_BY_LAST_MODIFIED = """
+             ORDER BY COALESCE(wt.updated_at, wt.created_at) DESC,
+                      (SELECT COALESCE(MAX(al.log_id), 0)
+                         FROM approvals_log al
+                        WHERE al.task_id = wt.task_id) DESC,
+                      CAST(SUBSTRING(wt.task_id, 11) AS UNSIGNED) DESC
+            """;
+
     private static final String SELECT_BASE = """
             SELECT wt.task_id, wt.campaign_id, wt.assigned_to,
                    wt.granular_task_id,
@@ -166,6 +175,28 @@ public class WorkTaskRepository {
                         .addValue("userId",  userId));
     }
 
+    /** Auto-created content tasks skip QC and complete directly. */
+    public int completeAutoAssigned(String taskId, int userId, LocalDateTime completedAt,
+                                    int minutesSpent, String submissionNotes) {
+        return jdbc.update("""
+                UPDATE work_tasks
+                SET status = 'COMPLETED',
+                    submitted_at = :completedAt,
+                    completed_at = :completedAt,
+                    total_time_logged_minutes = :minutes,
+                    submission_notes = :notes,
+                    updated_at = CURRENT_TIMESTAMP(6)
+                WHERE task_id = :id
+                  AND assigned_to = :userId
+                  AND status = 'IN_PROGRESS'
+                """,
+                new MapSqlParameterSource("completedAt", Timestamp.valueOf(completedAt))
+                        .addValue("minutes", minutesSpent)
+                        .addValue("notes",   submissionNotes)
+                        .addValue("id",      taskId)
+                        .addValue("userId",  userId));
+    }
+
     /** Marks the task as fully COMPLETED (QC manager approved). Stamps completed_at = now. */
     public int markCompleted(String taskId) {
         return jdbc.update("""
@@ -179,15 +210,40 @@ public class WorkTaskRepository {
     }
 
     /**
-     * Marks the task as CANCELLED — used when a QC reviewer rejects this task
-     * outright, or when the parent campaign is rejected/intervention-rejected
-     * before this task could be finished. Unlike {@link #markCompleted}, this
-     * does NOT stamp {@code completed_at}, because no asset was approved.
+     * Marks the task as CANCELLED — used when sibling tasks on a campaign are
+     * swept because another task was QC-rejected, or when the parent campaign
+     * is rejected before this task could be finished.
      */
     public int markCancelled(String taskId) {
         return jdbc.update("""
                 UPDATE work_tasks
                    SET status = 'CANCELLED'
+                 WHERE task_id = :id
+                """,
+                new MapSqlParameterSource("id", taskId));
+    }
+
+    /**
+     * Marks the task as REJECTED — used exclusively when a QC reviewer
+     * rejects this specific task outright. Sibling tasks swept as a result
+     * are set to CANCELLED (via {@link #cancelOpenTasksForCampaign}), not
+     * REJECTED, to distinguish the direct cause from the knock-on effect.
+     */
+    public int markRejected(String taskId) {
+        return jdbc.update("""
+                UPDATE work_tasks
+                   SET status = 'REJECTED',
+                       updated_at = CURRENT_TIMESTAMP(6)
+                 WHERE task_id = :id
+                """,
+                new MapSqlParameterSource("id", taskId));
+    }
+
+    /** Bumps {@code updated_at} so the row sorts ahead of batch-updated siblings. */
+    public int touchUpdatedAt(String taskId) {
+        return jdbc.update("""
+                UPDATE work_tasks
+                   SET updated_at = CURRENT_TIMESTAMP(6)
                  WHERE task_id = :id
                 """,
                 new MapSqlParameterSource("id", taskId));
@@ -324,7 +380,7 @@ public class WorkTaskRepository {
                    SET pre_hold_status = status,
                        status          = 'HELD'
                  WHERE task_id = :id
-                   AND status NOT IN ('HELD','COMPLETED','CANCELLED')
+                   AND status NOT IN ('HELD','COMPLETED','CANCELLED','REJECTED')
                 """,
                 new MapSqlParameterSource("id", taskId));
     }
@@ -411,20 +467,10 @@ public class WorkTaskRepository {
 
     /**
      * All work tasks across all users — feeds the Marketing Head's overview table.
-     * Ordered by campaign priority (desc) then task creation time (asc).
+     * Ordered by last-modified time (desc).
      */
     public List<WorkTask> findAll() {
-        String sql = SELECT_BASE + """
-                 ORDER BY
-                   CASE c.priority
-                     WHEN 'HIGH'   THEN 0
-                     WHEN 'MEDIUM' THEN 1
-                     WHEN 'LOW'    THEN 2
-                     ELSE               3
-                   END,
-                   wt.created_at ASC
-                """;
-        return jdbc.query(sql, WorkTaskRepository::map);
+        return jdbc.query(SELECT_BASE + ORDER_BY_LAST_MODIFIED, WorkTaskRepository::map);
     }
 
     /** Held tasks across all users — feeds the manager's "Held Tasks" tab. */
@@ -451,7 +497,7 @@ public class WorkTaskRepository {
                      WHEN c.priority = 'HIGH'   THEN 2
                      ELSE                            3
                    END,
-                   wt.created_at ASC
+                   COALESCE(wt.updated_at, wt.created_at) ASC
                 """;
         return jdbc.query(sql,
                 new MapSqlParameterSource("uid", userId),
@@ -474,7 +520,7 @@ public class WorkTaskRepository {
                 SELECT task_id, assigned_to
                   FROM work_tasks
                  WHERE campaign_id = :cId
-                   AND status NOT IN ('COMPLETED','CANCELLED')
+                   AND status NOT IN ('COMPLETED','CANCELLED','REJECTED')
                 """,
                 new MapSqlParameterSource("cId", campaignId));
         if (!rows.isEmpty()) {
@@ -482,7 +528,7 @@ public class WorkTaskRepository {
                     UPDATE work_tasks
                        SET status = 'CANCELLED'
                      WHERE campaign_id = :cId
-                       AND status NOT IN ('COMPLETED','CANCELLED')
+                       AND status NOT IN ('COMPLETED','CANCELLED','REJECTED')
                     """,
                     new MapSqlParameterSource("cId", campaignId));
         }
@@ -516,7 +562,7 @@ public class WorkTaskRepository {
      *      ASSIGNED items because rework is more time-sensitive.
      *   3. Then QC_REVIEW (waiting on the manager).
      *   4. Then terminal states (COMPLETED / CANCELLED) at the bottom.
-     *   5. Final tie-break is created_at ASC so FIFO holds inside each tier.
+     *   5. Final tie-break is updated_at DESC so recently-touched tasks surface first.
      */
     public List<WorkTask> findByAssignedTo(int userId) {
         // HELD tasks are now included so the worker can see them in their
@@ -533,6 +579,7 @@ public class WorkTaskRepository {
                      WHEN 'HELD'        THEN 3
                      WHEN 'COMPLETED'   THEN 4
                      WHEN 'CANCELLED'   THEN 5
+                     WHEN 'REJECTED'    THEN 5
                      ELSE                    6
                    END,
                    CASE
@@ -547,10 +594,18 @@ public class WorkTaskRepository {
                      WHEN 'ASSIGNED' THEN 1
                      ELSE                 2
                    END,
-                   wt.created_at ASC
+                   COALESCE(wt.updated_at, wt.created_at) DESC
                 """;
         return jdbc.query(sql,
                 new MapSqlParameterSource("uid", userId),
+                WorkTaskRepository::map);
+    }
+
+    public List<WorkTask> findByIds(List<String> ids) {
+        if (ids == null || ids.isEmpty()) return java.util.Collections.emptyList();
+        return jdbc.query(
+                SELECT_BASE + " WHERE wt.task_id IN (:ids)",
+                new MapSqlParameterSource("ids", ids),
                 WorkTaskRepository::map);
     }
 
@@ -571,6 +626,7 @@ public class WorkTaskRepository {
     public List<WorkTask> findCompletedByRequestorId(int requestorId) {
         String sql = SELECT_BASE +
                 " WHERE c.requestor_id = :requestorId AND wt.status = 'COMPLETED'" +
+                " AND NOT EXISTS (SELECT 1 FROM auto_created_tasks act WHERE act.created_task_id = wt.task_id)" +
                 " ORDER BY wt.completed_at DESC";
         return jdbc.query(sql,
                 new MapSqlParameterSource("requestorId", requestorId),
@@ -632,6 +688,66 @@ public class WorkTaskRepository {
     }
 
     /**
+     * Paged + filtered QC review queue.
+     * Excludes tasks assigned to {@code excludeUserId} (reviewer cannot self-approve).
+     * When {@code allowedWorkerRoleIds} is non-empty, only tasks whose assignee holds
+     * one of those roles are included (QC routing filter).  An empty list means
+     * "show all" — the backwards-compatible default when no routing is configured.
+     * Sorts newest-submitted first.
+     */
+    public PagedResponse<WorkTask> findPendingQcReviewPaged(
+            int excludeUserId,
+            java.util.List<String> allowedWorkerRoleIds,
+            String search, LocalDate dateFrom, LocalDate dateTo,
+            int page, int size) {
+
+        MapSqlParameterSource params = new MapSqlParameterSource();
+        params.addValue("excludeUserId", excludeUserId);
+        List<String> conds = new ArrayList<>();
+        conds.add("wt.status = 'QC_REVIEW'");
+        conds.add("c.status NOT IN ('REJECTED','COMPLETED')");
+        conds.add("wt.assigned_to != :excludeUserId");
+
+        if (allowedWorkerRoleIds != null && !allowedWorkerRoleIds.isEmpty()) {
+            conds.add("wt.assigned_to IN ("
+                    + "SELECT ur.user_id FROM user_roles ur "
+                    + "WHERE ur.role_id IN (:allowedWorkerRoleIds))");
+            params.addValue("allowedWorkerRoleIds", allowedWorkerRoleIds);
+        }
+
+        if (hasValue(search)) {
+            conds.add("(wt.task_id LIKE :search"
+                    + " OR CAST(wt.campaign_id AS CHAR) LIKE :search"
+                    + " OR gt.task_name LIKE :search"
+                    + " OR tt.task_name LIKE :search"
+                    + " OR u.full_name LIKE :search"
+                    + " OR req.full_name LIKE :search)");
+            params.addValue("search", "%" + search.trim() + "%");
+        }
+        if (dateFrom != null) {
+            conds.add("wt.submitted_at >= :dateFrom");
+            params.addValue("dateFrom", dateFrom.atStartOfDay());
+        }
+        if (dateTo != null) {
+            conds.add("wt.submitted_at <= :dateTo");
+            params.addValue("dateTo", dateTo.atTime(23, 59, 59));
+        }
+
+        String where = " WHERE " + String.join(" AND ", conds);
+        Long total = jdbc.queryForObject(COUNT_BASE + where, params, Long.class);
+        if (total == null) total = 0L;
+
+        params.addValue("_size", size).addValue("_offset", (long) page * size);
+        List<WorkTask> content = jdbc.query(
+                SELECT_BASE + where
+                + " ORDER BY wt.submitted_at DESC, CAST(SUBSTRING(wt.task_id, 11) AS UNSIGNED) DESC"
+                + " LIMIT :_size OFFSET :_offset",
+                params, WorkTaskRepository::map);
+
+        return PagedResponse.of(content, total, page, size);
+    }
+
+    /**
      * Counts tasks for a campaign that are still open (i.e. neither COMPLETED
      * nor CANCELLED). Used to detect when a campaign is fully done — the
      * campaign should flip to COMPLETED only when every remaining task has
@@ -642,7 +758,7 @@ public class WorkTaskRepository {
     public int countIncomplete(int campaignId) {
         Integer count = jdbc.queryForObject(
                 "SELECT COUNT(*) FROM work_tasks " +
-                " WHERE campaign_id = :cId AND status NOT IN ('COMPLETED','CANCELLED')",
+                " WHERE campaign_id = :cId AND status NOT IN ('COMPLETED','CANCELLED','REJECTED')",
                 new MapSqlParameterSource("cId", campaignId),
                 Integer.class);
         return count == null ? 0 : count;
@@ -672,10 +788,10 @@ public class WorkTaskRepository {
                        r.role_name,
                        SUM(CASE WHEN wt.status IN ('ASSIGNED','IN_PROGRESS','REWORK','QC_REVIEW')
                                 THEN 1 ELSE 0 END)                              AS current_active_tasks,
-                       SUM(CASE WHEN wt.status <> 'CANCELLED' THEN 1 ELSE 0 END) AS total_tasks,
+                       SUM(CASE WHEN wt.status NOT IN ('CANCELLED','REJECTED') THEN 1 ELSE 0 END) AS total_tasks,
                        SUM(CASE WHEN wt.status = 'COMPLETED' THEN 1 ELSE 0 END) AS completed_tasks,
                        SUM(CASE WHEN wt.status IN ('IN_PROGRESS','REWORK') THEN 1 ELSE 0 END) AS in_flight_tasks,
-                       SUM(CASE WHEN wt.status = 'CANCELLED' THEN 1 ELSE 0 END) AS cancelled_tasks,
+                       SUM(CASE WHEN wt.status IN ('CANCELLED','REJECTED') THEN 1 ELSE 0 END) AS cancelled_tasks,
                        COALESCE(SUM(CASE WHEN wt.status = 'COMPLETED'
                                           AND (:from IS NULL OR wt.completed_at >= :from)
                                           AND (:to   IS NULL OR wt.completed_at <= :to)
@@ -763,7 +879,7 @@ public class WorkTaskRepository {
         var team = jdbc.queryForList(
                 """
                 SELECT u.full_name                                              AS name,
-                       COUNT(wt.task_id)                                        AS total,
+                       SUM(CASE WHEN wt.status NOT IN ('CANCELLED','REJECTED') THEN 1 ELSE 0 END) AS total,
                        SUM(CASE WHEN wt.status = 'COMPLETED' THEN 1 ELSE 0 END) AS completed,
                        SUM(CASE WHEN wt.status IN ('IN_PROGRESS','REWORK','QC_REVIEW','ASSIGNED') THEN 1 ELSE 0 END) AS active,
                        COALESCE(SUM(wt.total_time_logged_minutes),0)            AS minutesLogged,
@@ -801,7 +917,7 @@ public class WorkTaskRepository {
 
         // ── Totals ────────────────────────────────────────────────────────────
         Integer totalCampaigns  = jdbc.queryForObject("SELECT COUNT(*) FROM campaigns",    new MapSqlParameterSource(), Integer.class);
-        Integer totalTasks      = jdbc.queryForObject("SELECT COUNT(*) FROM work_tasks WHERE status <> 'CANCELLED'", new MapSqlParameterSource(), Integer.class);
+        Integer totalTasks      = jdbc.queryForObject("SELECT COUNT(*) FROM work_tasks WHERE status NOT IN ('CANCELLED','REJECTED')", new MapSqlParameterSource(), Integer.class);
         Integer completedTasks  = jdbc.queryForObject("SELECT COUNT(*) FROM work_tasks WHERE status = 'COMPLETED'",  new MapSqlParameterSource(), Integer.class);
         Integer pendingQc       = jdbc.queryForObject("SELECT COUNT(*) FROM work_tasks WHERE status = 'QC_REVIEW'",  new MapSqlParameterSource(), Integer.class);
         Integer inRework        = jdbc.queryForObject("SELECT COUNT(*) FROM work_tasks WHERE status = 'REWORK'",     new MapSqlParameterSource(), Integer.class);
@@ -834,24 +950,20 @@ public class WorkTaskRepository {
             String taskId, String campaignId,
             String requestorName, String assigneeName,
             String taskType, String priority, String status,
+            Boolean autoGeneratedOnly,
             LocalDate dateFrom, LocalDate dateTo,
             int page, int size) {
 
         MapSqlParameterSource params = new MapSqlParameterSource();
         String where = buildAllTasksWhere(params, taskId, campaignId,
-                requestorName, assigneeName, taskType, priority, status, dateFrom, dateTo);
+                requestorName, assigneeName, taskType, priority, status, autoGeneratedOnly, dateFrom, dateTo);
 
         Long total = jdbc.queryForObject(COUNT_BASE + where, params, Long.class);
         if (total == null) total = 0L;
 
-        String orderBy = """
-                 ORDER BY
-                   CASE c.priority WHEN 'HIGH' THEN 0 WHEN 'MEDIUM' THEN 1 WHEN 'LOW' THEN 2 ELSE 3 END,
-                   wt.created_at ASC
-                """;
         params.addValue("_size", size).addValue("_offset", (long) page * size);
         List<WorkTask> content = jdbc.query(
-                SELECT_BASE + where + orderBy + " LIMIT :_size OFFSET :_offset",
+                SELECT_BASE + where + ORDER_BY_LAST_MODIFIED + " LIMIT :_size OFFSET :_offset",
                 params, WorkTaskRepository::map);
 
         return PagedResponse.of(content, total, page, size);
@@ -873,6 +985,7 @@ public class WorkTaskRepository {
         List<String> conds = new ArrayList<>();
         conds.add("c.requestor_id = :requestorId");
         conds.add("wt.status = 'COMPLETED'");
+        conds.add("NOT EXISTS (SELECT 1 FROM auto_created_tasks act WHERE act.created_task_id = wt.task_id)");
 
         if (hasValue(campaignId)) {
             conds.add("CAST(wt.campaign_id AS CHAR) LIKE :campaignId");
@@ -922,7 +1035,7 @@ public class WorkTaskRepository {
             MapSqlParameterSource params,
             String taskId, String campaignId,
             String requestorName, String assigneeName,
-            String taskType, String priority, String status,
+            String taskType, String priority, String status, Boolean autoGeneratedOnly,
             LocalDate dateFrom, LocalDate dateTo) {
 
         List<String> conds = new ArrayList<>();
@@ -955,12 +1068,17 @@ public class WorkTaskRepository {
             conds.add("wt.status = :status");
             params.addValue("status", status.trim());
         }
+        if (autoGeneratedOnly != null) {
+            conds.add(autoGeneratedOnly
+                    ? "EXISTS (SELECT 1 FROM auto_created_tasks act WHERE act.created_task_id = wt.task_id)"
+                    : "NOT EXISTS (SELECT 1 FROM auto_created_tasks act WHERE act.created_task_id = wt.task_id)");
+        }
         if (dateFrom != null) {
-            conds.add("wt.assigned_at >= :dateFrom");
+            conds.add("wt.created_at >= :dateFrom");
             params.addValue("dateFrom", dateFrom.atStartOfDay());
         }
         if (dateTo != null) {
-            conds.add("wt.assigned_at <= :dateTo");
+            conds.add("wt.created_at <= :dateTo");
             params.addValue("dateTo", dateTo.atTime(23, 59, 59));
         }
 

@@ -4,10 +4,12 @@ import com.medplus.marketing_automation_backend.domain.AssetInfo;
 import com.medplus.marketing_automation_backend.domain.TaskCollaborator;
 import com.medplus.marketing_automation_backend.domain.User;
 import com.medplus.marketing_automation_backend.domain.WorkTask;
+import com.medplus.marketing_automation_backend.dto.PagedResponse;
 import com.medplus.marketing_automation_backend.dto.WorkTaskResponse;
 import com.medplus.marketing_automation_backend.exception.BadRequestException;
 import com.medplus.marketing_automation_backend.exception.ResourceNotFoundException;
 import com.medplus.marketing_automation_backend.repository.AssetInfoRepository;
+import com.medplus.marketing_automation_backend.repository.AutoCreatedTaskRepository;
 import com.medplus.marketing_automation_backend.repository.CollaboratorRepository;
 import com.medplus.marketing_automation_backend.repository.UserRepository;
 import com.medplus.marketing_automation_backend.repository.WorkTaskRepository;
@@ -24,27 +26,32 @@ import java.security.cert.X509Certificate;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.stream.Collectors;
 
 @Service
 public class CollaborationService {
 
-    private final CollaboratorRepository collaboratorRepo;
-    private final WorkTaskRepository     workTaskRepo;
-    private final AssetInfoRepository    assetInfoRepo;
-    private final UserRepository         userRepo;
+    private final CollaboratorRepository      collaboratorRepo;
+    private final WorkTaskRepository          workTaskRepo;
+    private final AssetInfoRepository         assetInfoRepo;
+    private final UserRepository              userRepo;
+    private final AutoCreatedTaskRepository   autoCreatedTaskRepo;
 
     public CollaborationService(CollaboratorRepository collaboratorRepo,
                                 WorkTaskRepository workTaskRepo,
                                 AssetInfoRepository assetInfoRepo,
-                                UserRepository userRepo) {
-        this.collaboratorRepo = collaboratorRepo;
-        this.workTaskRepo     = workTaskRepo;
-        this.assetInfoRepo    = assetInfoRepo;
-        this.userRepo         = userRepo;
+                                UserRepository userRepo,
+                                AutoCreatedTaskRepository autoCreatedTaskRepo) {
+        this.collaboratorRepo    = collaboratorRepo;
+        this.workTaskRepo        = workTaskRepo;
+        this.assetInfoRepo       = assetInfoRepo;
+        this.userRepo            = userRepo;
+        this.autoCreatedTaskRepo = autoCreatedTaskRepo;
     }
 
     /**
@@ -164,6 +171,70 @@ public class CollaborationService {
     }
 
     /**
+     * Paged + filtered collaboration list for a user.
+     * Delegates to the battle-tested {@link #getMyCollaborations(int)} which handles
+     * all user-role paths (owner, collaborator, requestor, admin/manager), then
+     * applies role-filter, text search, and pagination in memory.
+     * Collaboration lists are typically small so this is perfectly acceptable.
+     */
+    @org.springframework.transaction.annotation.Transactional(readOnly = true)
+    public PagedResponse<WorkTaskResponse> getMyCollaborationsPaged(
+            int userId, String roleFilter, String search, String taskId, int page, int size) {
+
+        List<WorkTaskResponse> all = getMyCollaborations(userId);
+
+        List<WorkTaskResponse> filtered;
+
+        // When a specific taskId is requested (e.g. navigate from "Collaborate" button)
+        // show that single card regardless of collaborationActive state so it is always
+        // visible right after the worker clicks Start.
+        if (taskId != null && !taskId.isBlank()) {
+            filtered = all.stream()
+                    .filter(t -> taskId.equals(t.getTaskId()))
+                    .collect(Collectors.toList());
+        } else {
+            // Only show active collaborations (chat/assets open), matching the original UI behaviour
+            filtered = all.stream()
+                    .filter(WorkTaskResponse::isCollaborationActive)
+                    .filter(t -> {
+                        if ("mine".equals(roleFilter))     return "OWNER".equals(t.getMyRole());
+                        if ("involved".equals(roleFilter)) return !"OWNER".equals(t.getMyRole());
+                        return true; // "all"
+                    })
+                    .collect(Collectors.toList());
+
+            // Text search
+            if (search != null && !search.isBlank()) {
+                String q = search.trim().toLowerCase();
+                filtered = filtered.stream()
+                        .filter(t -> {
+                            String hay = String.join(" ",
+                                    nullToEmpty(t.getTaskId()),
+                                    String.valueOf(t.getCampaignId()),
+                                    nullToEmpty(t.getGranularTaskName()),
+                                    nullToEmpty(t.getTaskTypeName()),
+                                    nullToEmpty(t.getAssigneeName()),
+                                    nullToEmpty(t.getRequestorName())
+                            ).toLowerCase();
+                            return hay.contains(q);
+                        })
+                        .collect(Collectors.toList());
+            }
+        }
+
+        long total    = filtered.size();
+        int  fromIdx  = page * size;
+        int  toIdx    = (int) Math.min(fromIdx + size, total);
+        List<WorkTaskResponse> pageContent =
+                fromIdx >= total ? java.util.Collections.emptyList()
+                                 : filtered.subList(fromIdx, toIdx);
+
+        return PagedResponse.of(pageContent, total, page, size);
+    }
+
+    private static String nullToEmpty(String s) { return s == null ? "" : s; }
+
+    /**
      * Starts collaboration on a task: marks is_collaboration_started = true,
      * auto-adds the worker and requestor as collaborators, and — if the task is
      * already IN_PROGRESS — also marks it active immediately.
@@ -254,10 +325,37 @@ public class CollaborationService {
         }
     }
 
-    /** List all assets for a task. Caller must have access. */
+    /** List all assets for a task and any linked auto-created content task. Caller must have access. */
     public List<AssetInfo> getAssets(String taskId, int callerUserId) {
         assertAccess(taskId, callerUserId);
-        return assetInfoRepo.findByTaskId(taskId);
+        WorkTask task = workTaskRepo.findById(taskId)
+                .orElseThrow(() -> new ResourceNotFoundException("Task not found: " + taskId));
+        User caller = userRepo.findById((long) callerUserId).orElse(null);
+
+        if (caller != null && caller.hasRole("Marketing Manager")) {
+            return assetInfoRepo.findByTaskIds(relatedTaskIdsForAssets(taskId));
+        }
+        if (isCampaignRequestorViewingDesignerTask(task, callerUserId)) {
+            return assetInfoRepo.findByTaskId(taskId);
+        }
+        return assetInfoRepo.findByTaskIds(relatedTaskIdsForAssets(taskId));
+    }
+
+    private boolean isCampaignRequestorViewingDesignerTask(WorkTask task, int callerUserId) {
+        if (task.getRequestorId() == null || task.getRequestorId() != callerUserId) {
+            return false;
+        }
+        return autoCreatedTaskRepo.findBySourceTaskId(task.getTaskId()).isPresent();
+    }
+
+    private List<String> relatedTaskIdsForAssets(String taskId) {
+        Set<String> ids = new LinkedHashSet<>();
+        ids.add(taskId);
+        autoCreatedTaskRepo.findBySourceTaskId(taskId)
+                .ifPresent(link -> ids.add(link.getCreatedTaskId()));
+        autoCreatedTaskRepo.findByCreatedTaskId(taskId)
+                .ifPresent(link -> ids.add(link.getSourceTaskId()));
+        return new ArrayList<>(ids);
     }
 
     /**

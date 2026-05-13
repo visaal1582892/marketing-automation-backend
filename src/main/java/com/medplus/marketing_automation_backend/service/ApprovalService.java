@@ -101,16 +101,23 @@ public class ApprovalService {
             }
             case NEEDS_REWORK -> {
                 workTaskRepo.markRework(taskId);
+                // Do NOT auto-sync the linked content task here.
+                // The designer decides whether to send the content task for rework
+                // by explicitly clicking "Content Rework". Doing it automatically
+                // caused the content task to flip to REWORK on every QC rejection
+                // without the designer's intent.
                 workTaskRepo.activateCollaboration(taskId); // REWORK = task back to worker → re-activate
                 log.info("QC NEEDS_REWORK | taskId={} campaignId={} comment={}",
                         taskId, task.getCampaignId(), req.getComments());
             }
             case REJECTED -> {
-                workTaskRepo.markCancelled(taskId);
+                workTaskRepo.markRejected(taskId);
                 if (task.getAssignedTo() != null) {
                     userRepo.decrementActiveTasks(task.getAssignedTo().longValue());
                 }
                 cancelSiblingTasksAndRefreshCounters(task.getCampaignId(), task.getTaskId());
+                // Sibling cancellations share the same second; bump the rejected row last.
+                workTaskRepo.touchUpdatedAt(taskId);
                 campaignRepo.updateStatusAndNotes(task.getCampaignId(), CampaignStatus.REJECTED,
                         "Rejected by reviewer: " + (req.getComments() != null ? req.getComments() : ""));
                 log.info("QC REJECTED — campaign rejected | taskId={} campaignId={} comment={}",

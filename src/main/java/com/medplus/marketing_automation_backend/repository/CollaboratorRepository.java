@@ -13,6 +13,7 @@ import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Timestamp;
 import java.time.LocalDateTime;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 
@@ -179,6 +180,96 @@ public class CollaboratorRepository {
     }
 
     /**
+     * Paged + filtered list of all active collaboration tasks for a user.
+     * Covers: tasks owned by the user (OWNER) and tasks where the user is a collaborator.
+     * Only tasks with {@code is_collaboration_active = TRUE} are included.
+     *
+     * @param roleFilter "mine" → owner only; "involved" → collaborator only; anything else → all
+     */
+    public com.medplus.marketing_automation_backend.dto.PagedResponse<WorkTask> findMyCollaborationsPaged(
+            int userId, String roleFilter, String search, int page, int size) {
+
+        MapSqlParameterSource params = new MapSqlParameterSource();
+        params.addValue("userId", userId);
+
+        String fromJoins = """
+                FROM work_tasks wt
+                LEFT JOIN users             u   ON u.user_id              = wt.assigned_to
+                LEFT JOIN granular_tasks    gt  ON gt.task_id             = wt.granular_task_id
+                LEFT JOIN task_types        tt  ON tt.task_type_id        = gt.task_type_id
+                LEFT JOIN campaigns         c   ON c.campaign_id          = wt.campaign_id
+                LEFT JOIN users             req ON req.user_id            = c.requestor_id
+                """;
+
+        List<String> conds = new ArrayList<>();
+        conds.add("wt.is_collaboration_started = 1");
+
+        // Role filter — mirrors the same logic used in countActiveForUser
+        if ("mine".equals(roleFilter)) {
+            // "Created by me" = the user is the assigned worker (OWNER)
+            conds.add("wt.assigned_to = :userId");
+        } else if ("involved".equals(roleFilter)) {
+            // "I'm involved" = user is a collaborator or requestor, but NOT the owner
+            conds.add("wt.assigned_to != :userId");
+            conds.add("(EXISTS (SELECT 1 FROM task_collaborators tc"
+                    + "        WHERE tc.task_id = wt.task_id AND tc.user_id = :userId)"
+                    + " OR c.requestor_id = :userId)");
+        } else {
+            // "All" — owner, collaborator, or requestor
+            conds.add("(wt.assigned_to = :userId"
+                    + " OR EXISTS (SELECT 1 FROM task_collaborators tc"
+                    + "            WHERE tc.task_id = wt.task_id AND tc.user_id = :userId)"
+                    + " OR c.requestor_id = :userId)");
+        }
+
+        if (search != null && !search.isBlank()) {
+            conds.add("(wt.task_id LIKE :search"
+                    + " OR CAST(wt.campaign_id AS CHAR) LIKE :search"
+                    + " OR gt.task_name LIKE :search"
+                    + " OR tt.task_name LIKE :search"
+                    + " OR u.full_name LIKE :search"
+                    + " OR req.full_name LIKE :search)");
+            params.addValue("search", "%" + search.trim() + "%");
+        }
+
+        String where = " WHERE " + String.join(" AND ", conds);
+        Long total = jdbc.queryForObject("SELECT COUNT(*) " + fromJoins + where, params, Long.class);
+        if (total == null) total = 0L;
+
+        String selectSql = """
+                SELECT wt.task_id, wt.campaign_id, wt.assigned_to,
+                       wt.granular_task_id, wt.status,
+                       wt.is_collaboration_started, wt.is_collaboration_active,
+                       wt.assigned_at, wt.accepted_at, wt.started_at,
+                       wt.submitted_at, wt.completed_at,
+                       wt.total_time_logged_minutes, wt.dynamic_deadline,
+                       wt.submission_notes, wt.created_at, wt.updated_at,
+                       u.full_name    AS assignee_name,
+                       gt.task_name  AS granular_task_name,
+                       tt.task_name  AS task_type_name,
+                       c.deadline    AS campaign_deadline,
+                       c.priority    AS campaign_priority,
+                       c.status      AS campaign_status,
+                       c.requestor_id AS requestor_id,
+                       req.full_name AS requestor_name,
+                       (SELECT COUNT(*) FROM approvals_log al WHERE al.task_id = wt.task_id AND al.action_taken = 'NEEDS_REWORK') AS rework_count,
+                       (SELECT COUNT(*) FROM approvals_log al WHERE al.task_id = wt.task_id AND al.action_taken = 'REQUESTOR_REWORK') AS requestor_rework_count,
+                       (SELECT al.comments FROM approvals_log al WHERE al.task_id = wt.task_id AND al.action_taken = 'NEEDS_REWORK' ORDER BY al.created_at DESC LIMIT 1) AS latest_manager_rework_comment,
+                       (SELECT al.comments FROM approvals_log al WHERE al.task_id = wt.task_id AND al.action_taken = 'REQUESTOR_REWORK' ORDER BY al.created_at DESC LIMIT 1) AS latest_requestor_rework_comment,
+                       (SELECT u_adb.full_name FROM approvals_log al_adb LEFT JOIN users u_adb ON u_adb.user_id = al_adb.reviewer_id WHERE al_adb.task_id = wt.task_id ORDER BY al_adb.log_id DESC LIMIT 1) AS latest_action_done_by_name
+                """;
+
+        params.addValue("_size", size).addValue("_offset", (long) page * size);
+        List<WorkTask> content = jdbc.query(
+                selectSql + fromJoins + where
+                + " ORDER BY COALESCE(wt.updated_at, wt.created_at) DESC, CAST(SUBSTRING(wt.task_id, 11) AS UNSIGNED) DESC"
+                + " LIMIT :_size OFFSET :_offset",
+                params, CollaboratorRepository::mapWorkTask);
+
+        return com.medplus.marketing_automation_backend.dto.PagedResponse.of(content, total, page, size);
+    }
+
+    /**
      * All tasks where the campaign's requestor_id matches the given userId
      * AND the task has at least one collaborator — used so requestors see
      * every collaboration on their campaigns even if not explicitly invited.
@@ -229,7 +320,7 @@ public class CollaboratorRepository {
                 WHERE c.requestor_id = :requestorId
                   AND wt.status NOT IN ('CANCELLED')
                   AND EXISTS (SELECT 1 FROM task_collaborators tc WHERE tc.task_id = wt.task_id)
-                ORDER BY wt.created_at DESC
+                ORDER BY COALESCE(wt.updated_at, wt.created_at) DESC
                 """;
         return jdbc.query(sql, new MapSqlParameterSource("requestorId", requestorId),
                 CollaboratorRepository::mapWorkTask);
@@ -395,7 +486,7 @@ public class CollaboratorRepository {
                 LEFT JOIN users             req ON req.user_id            = c.requestor_id
                 WHERE wt.status NOT IN ('CANCELLED')
                   AND EXISTS (SELECT 1 FROM task_collaborators tc WHERE tc.task_id = wt.task_id)
-                ORDER BY wt.created_at DESC
+                ORDER BY COALESCE(wt.updated_at, wt.created_at) DESC
                 """;
         return jdbc.query(sql, new MapSqlParameterSource(), CollaboratorRepository::mapWorkTask);
     }

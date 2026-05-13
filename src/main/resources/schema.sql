@@ -248,7 +248,7 @@ CREATE TABLE IF NOT EXISTS work_tasks (
     --   the marketing-head approval gate.
     status                     ENUM(
                                    'ASSIGNED','ACCEPTED','IN_PROGRESS',
-                                   'QC_REVIEW','REWORK','COMPLETED','CANCELLED','HELD'
+                                   'QC_REVIEW','REWORK','COMPLETED','CANCELLED','HELD','REJECTED'
                                )            NOT NULL DEFAULT 'ASSIGNED',
     assigned_at                TIMESTAMP    NULL,
     accepted_at                TIMESTAMP    NULL,

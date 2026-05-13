@@ -1,6 +1,7 @@
 package com.medplus.marketing_automation_backend.repository;
 
 import com.medplus.marketing_automation_backend.domain.GranularTask;
+import com.medplus.marketing_automation_backend.dto.PagedResponse;
 import com.medplus.marketing_automation_backend.enums.RecordStatus;
 import com.medplus.marketing_automation_backend.enums.TaskCategory;
 import org.springframework.dao.EmptyResultDataAccessException;
@@ -11,6 +12,7 @@ import org.springframework.stereotype.Repository;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 
@@ -35,15 +37,55 @@ public class GranularTaskRepository {
     public List<GranularTask> findAll(boolean includeInactive) {
         String sql = SELECT_BASE
                 + (includeInactive ? "" : " WHERE gt.status = 'ACTIVE'")
-                + " ORDER BY CAST(SUBSTRING(gt.task_id, 6) AS UNSIGNED) ASC";
+                + " ORDER BY COALESCE(gt.updated_at, gt.created_at) DESC";
         return jdbc.query(sql, mapper());
     }
 
     public List<GranularTask> findByTaskType(String taskTypeId) {
         String sql = SELECT_BASE
                 + " WHERE gt.task_type_id = :taskTypeId AND gt.status = 'ACTIVE'"
-                + " ORDER BY CAST(SUBSTRING(gt.task_id, 6) AS UNSIGNED) ASC";
+                + " ORDER BY COALESCE(gt.updated_at, gt.created_at) DESC";
         return jdbc.query(sql, new MapSqlParameterSource("taskTypeId", taskTypeId), mapper());
+    }
+
+    /** Paged + filtered list for the admin Granular Tasks table. */
+    public PagedResponse<GranularTask> findAllPaged(String taskId, String taskName,
+                                                     String taskTypeName, String status,
+                                                     int page, int size) {
+        MapSqlParameterSource params = new MapSqlParameterSource();
+        List<String> conds = new ArrayList<>();
+
+        if (taskId != null && !taskId.isBlank()) {
+            conds.add("gt.task_id LIKE :taskId");
+            params.addValue("taskId", "%" + taskId.trim() + "%");
+        }
+        if (taskName != null && !taskName.isBlank()) {
+            conds.add("gt.task_name LIKE :taskName");
+            params.addValue("taskName", "%" + taskName.trim() + "%");
+        }
+        if (taskTypeName != null && !taskTypeName.isBlank()) {
+            conds.add("tt.task_name = :taskTypeName");
+            params.addValue("taskTypeName", taskTypeName.trim());
+        }
+        if (status != null && !status.isBlank() && !"all".equalsIgnoreCase(status)) {
+            conds.add("gt.status = :status");
+            params.addValue("status", status.trim().toUpperCase());
+        }
+
+        String where = conds.isEmpty() ? "" : " WHERE " + String.join(" AND ", conds);
+        String countSql = "SELECT COUNT(*) FROM granular_tasks gt"
+                + " LEFT JOIN task_types tt ON tt.task_type_id = gt.task_type_id" + where;
+        Long total = jdbc.queryForObject(countSql, params, Long.class);
+        if (total == null) total = 0L;
+
+        params.addValue("_size", size).addValue("_offset", (long) page * size);
+        List<GranularTask> content = jdbc.query(
+                SELECT_BASE + where
+                        + " ORDER BY COALESCE(gt.updated_at, gt.created_at) DESC"
+                        + " LIMIT :_size OFFSET :_offset",
+                params, mapper());
+
+        return PagedResponse.of(content, total, page, size);
     }
 
     public Optional<GranularTask> findById(String id) {

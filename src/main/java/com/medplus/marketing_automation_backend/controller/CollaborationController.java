@@ -4,6 +4,7 @@ import com.medplus.marketing_automation_backend.domain.AssetInfo;
 import com.medplus.marketing_automation_backend.domain.TaskCollaborator;
 import com.medplus.marketing_automation_backend.domain.TaskMessage;
 import com.medplus.marketing_automation_backend.domain.User;
+import com.medplus.marketing_automation_backend.dto.PagedResponse;
 import com.medplus.marketing_automation_backend.dto.WorkTaskResponse;
 import com.medplus.marketing_automation_backend.security.CustomUserDetails;
 import com.medplus.marketing_automation_backend.service.CollaborationService;
@@ -94,12 +95,18 @@ public class CollaborationController {
 
     /**
      * List all tasks on which the caller is a collaborator (newest first).
+     * Server-side paged and filtered.
      */
     @GetMapping("/my")
-    public List<WorkTaskResponse> myCollaborations(
-            @AuthenticationPrincipal CustomUserDetails principal) {
-        return collaborationService.getMyCollaborations(
-                principal.getUser().getUserId().intValue());
+    public PagedResponse<WorkTaskResponse> myCollaborations(
+            @AuthenticationPrincipal CustomUserDetails principal,
+            @RequestParam(required = false, defaultValue = "all") String role,
+            @RequestParam(required = false) String search,
+            @RequestParam(required = false) String taskId,
+            @RequestParam(defaultValue = "0")  int page,
+            @RequestParam(defaultValue = "12") int size) {
+        return collaborationService.getMyCollaborationsPaged(
+                principal.getUser().getUserId().intValue(), role, search, taskId, page, size);
     }
 
     /**

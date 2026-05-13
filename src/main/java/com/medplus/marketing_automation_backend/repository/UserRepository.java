@@ -185,7 +185,7 @@ public class UserRepository {
 
     public List<User> findAll(boolean includeInactive) {
         String where = includeInactive ? "" : " WHERE u.status = 'ACTIVE'";
-        List<User> users = jdbc.query(SELECT_BASE + where + " ORDER BY u.user_id", UserRepository::map);
+        List<User> users = jdbc.query(SELECT_BASE + where + " ORDER BY COALESCE(u.updated_at, u.created_at) DESC", UserRepository::map);
         enrichWithRoles(users);
         return users;
     }
@@ -197,7 +197,7 @@ public class UserRepository {
                         JOIN user_roles ur ON ur.user_id = u.user_id
                         WHERE ur.role_id = :roleId
                           AND u.status   = 'ACTIVE'
-                        ORDER BY u.user_id
+                        ORDER BY COALESCE(u.updated_at, u.created_at) DESC
                         """,
                 new MapSqlParameterSource("roleId", roleId),
                 UserRepository::map);
@@ -245,6 +245,47 @@ public class UserRepository {
      *
      * @param excludeUserId user_id to skip; pass {@code -1} to skip no one
      */
+    /**
+     * Picks the least-loaded active user who can take auto-assigned content work:
+     * Content Writer role holders and users whose designation includes "Content Writer".
+     */
+    public Optional<User> findBestAvailableContentWriter(int excludeUserId) {
+        try {
+            String excludeClause = excludeUserId > 0 ? " AND u.user_id != :excludeUserId" : "";
+            User u = jdbc.queryForObject(
+                    SELECT_BASE + """
+                              LEFT JOIN (
+                                  SELECT assigned_to, COUNT(*) AS active_count
+                                    FROM work_tasks
+                                   WHERE assigned_to IS NOT NULL
+                                     AND status IN ('ASSIGNED','IN_PROGRESS','REWORK','QC_REVIEW')
+                                   GROUP BY assigned_to
+                              ) wt ON wt.assigned_to = u.user_id
+                         WHERE u.status = 'ACTIVE'
+                           AND (
+                                EXISTS (
+                                    SELECT 1
+                                      FROM user_roles ur
+                                     WHERE ur.user_id = u.user_id
+                                       AND ur.role_id = :contentRoleId
+                                )
+                                OR dsg.designation_name LIKE '%Content Writer%'
+                           )
+                         """ + excludeClause + """
+                         ORDER BY COALESCE(wt.active_count, 0) ASC, u.user_id ASC
+                         LIMIT 1
+                         FOR UPDATE
+                        """,
+                    new MapSqlParameterSource("contentRoleId", "4")
+                            .addValue("excludeUserId", excludeUserId),
+                    UserRepository::map);
+            enrichWithRoles(u);
+            return Optional.ofNullable(u);
+        } catch (EmptyResultDataAccessException e) {
+            return Optional.empty();
+        }
+    }
+
     public Optional<User> findBestAvailableUserInRole(String roleId, int excludeUserId) {
         try {
             String excludeClause = excludeUserId > 0 ? " AND u.user_id != :excludeUserId" : "";
@@ -406,7 +447,7 @@ public class UserRepository {
 
         params.addValue("_size", size).addValue("_offset", (long) page * size);
         List<User> content = jdbc.query(
-                SELECT_BASE + where + " ORDER BY u.user_id LIMIT :_size OFFSET :_offset",
+                SELECT_BASE + where + " ORDER BY COALESCE(u.updated_at, u.created_at) DESC LIMIT :_size OFFSET :_offset",
                 params, UserRepository::map);
         enrichWithRoles(content);
         return PagedResponse.of(content, total, page, size);

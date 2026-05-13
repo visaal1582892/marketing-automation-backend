@@ -8,8 +8,16 @@ public enum TaskStatus {
     REWORK("Rework"),
     COMPLETED("Completed"),
     /**
-     * Task was cancelled — either rejected at QC, or its parent campaign was
-     * rejected after partial routing. The work is not "completed" (no asset
+     * Task was explicitly rejected by a QC reviewer. Unlike CANCELLED (which
+     * covers sibling tasks swept away when a campaign is closed), REJECTED
+     * means this specific task failed QC review and caused the campaign to be
+     * closed.
+     */
+    REJECTED("Rejected"),
+    /**
+     * Task was cancelled — either its parent campaign was rejected after
+     * partial routing, or a sibling task was rejected at QC causing all
+     * remaining open tasks to be swept. The work is not "completed" (no asset
      * was approved), but the task is closed and should no longer count toward
      * the assignee's capacity or appear as actionable in their queue.
      */
@@ -32,7 +40,7 @@ public enum TaskStatus {
 
     /** Statuses that no longer count toward a user's active workload. */
     public boolean isTerminal() {
-        return this == COMPLETED || this == CANCELLED;
+        return this == COMPLETED || this == CANCELLED || this == REJECTED;
     }
 
     /** True for statuses that consume one of the assignee's workload slots. */

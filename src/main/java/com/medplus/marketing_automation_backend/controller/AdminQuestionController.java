@@ -1,6 +1,7 @@
 package com.medplus.marketing_automation_backend.controller;
 
 import com.medplus.marketing_automation_backend.domain.DynamicQuestion;
+import com.medplus.marketing_automation_backend.dto.PagedResponse;
 import com.medplus.marketing_automation_backend.dto.QuestionResponse;
 import com.medplus.marketing_automation_backend.dto.QuestionUpsertRequest;
 import com.medplus.marketing_automation_backend.enums.FieldType;
@@ -34,8 +35,22 @@ public class AdminQuestionController {
         this.mappingRepo  = mappingRepo;
     }
 
+    /**
+     * List questions.
+     * Without page/size: returns full list.
+     * With page/size: returns PagedResponse for the admin Question Library table.
+     */
     @GetMapping
-    public List<QuestionResponse> listAll() {
+    public Object listAll(@RequestParam(required = false) String questionText,
+                          @RequestParam(required = false) Integer page,
+                          @RequestParam(required = false) Integer size) {
+        if (page != null || size != null) {
+            PagedResponse<Map<String, Object>> paged = questionRepo.findAllWithMappingsPaged(
+                    questionText, page != null ? page : 0, size != null ? size : 20);
+            List<QuestionResponse> content = paged.content().stream()
+                    .map(this::toResponse).toList();
+            return PagedResponse.of(content, paged.totalElements(), paged.page(), paged.size());
+        }
         List<Map<String, Object>> rows = questionRepo.findAllWithMappings();
         List<QuestionResponse> result = new ArrayList<>();
         for (Map<String, Object> row : rows) {

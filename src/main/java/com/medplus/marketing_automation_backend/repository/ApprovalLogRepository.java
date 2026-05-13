@@ -9,6 +9,7 @@ import org.springframework.stereotype.Repository;
 import java.sql.Timestamp;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 
 @Repository
 public class ApprovalLogRepository {
@@ -126,5 +127,34 @@ public class ApprovalLogRepository {
                             .createdAt(ts == null ? null : ts.toLocalDateTime())
                             .build();
                 });
+    }
+
+    public Optional<ApprovalLog> findLatestByTaskIdAndAction(String taskId, ApprovalAction action) {
+        List<ApprovalLog> rows = jdbc.query("""
+                SELECT al.log_id, al.task_id, al.reviewer_id, al.action_taken,
+                       al.comments, al.created_at, u.full_name AS reviewer_name
+                FROM approvals_log al
+                LEFT JOIN users u ON u.user_id = al.reviewer_id
+                WHERE al.task_id = :taskId
+                  AND al.action_taken = :action
+                ORDER BY al.log_id DESC
+                LIMIT 1
+                """,
+                new MapSqlParameterSource("taskId", taskId)
+                        .addValue("action", action == null ? null : action.name()),
+                (rs, rowNum) -> {
+                    String actionTaken = rs.getString("action_taken");
+                    Timestamp ts = rs.getTimestamp("created_at");
+                    return ApprovalLog.builder()
+                            .logId(rs.getInt("log_id"))
+                            .taskId(rs.getString("task_id"))
+                            .reviewerId(rs.getInt("reviewer_id"))
+                            .reviewerName(rs.getString("reviewer_name"))
+                            .actionTaken(actionTaken == null ? null : ApprovalAction.valueOf(actionTaken))
+                            .comments(rs.getString("comments"))
+                            .createdAt(ts == null ? null : ts.toLocalDateTime())
+                            .build();
+                });
+        return rows.isEmpty() ? Optional.empty() : Optional.of(rows.get(0));
     }
 }

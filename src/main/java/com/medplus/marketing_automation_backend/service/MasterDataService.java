@@ -3,6 +3,7 @@ package com.medplus.marketing_automation_backend.service;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.medplus.marketing_automation_backend.domain.MasterItem;
+import com.medplus.marketing_automation_backend.dto.PagedResponse;
 import com.medplus.marketing_automation_backend.enums.MasterTableType;
 import com.medplus.marketing_automation_backend.exception.BadRequestException;
 import com.medplus.marketing_automation_backend.exception.ResourceNotFoundException;
@@ -26,6 +27,11 @@ public class MasterDataService {
 
     public List<MasterItem> list(String slug, boolean includeInactive) {
         return repo.findAll(resolve(slug), includeInactive);
+    }
+
+    public PagedResponse<MasterItem> listPaged(String slug, String id, String name,
+                                                String status, int page, int size) {
+        return repo.findAllPaged(resolve(slug), id, name, status, page, size);
     }
 
     public MasterItem get(String slug, String id) {

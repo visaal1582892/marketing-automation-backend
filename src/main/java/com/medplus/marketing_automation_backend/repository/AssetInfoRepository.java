@@ -60,16 +60,22 @@ public class AssetInfoRepository {
 
     /** All assets for a task, oldest first, joined with uploader name. */
     public List<AssetInfo> findByTaskId(String taskId) {
+        return findByTaskIds(List.of(taskId));
+    }
+
+    /** All assets for the given tasks, oldest first, joined with uploader name. */
+    public List<AssetInfo> findByTaskIds(List<String> taskIds) {
+        if (taskIds == null || taskIds.isEmpty()) return List.of();
         return jdbc.query("""
                 SELECT ai.asset_id, ai.task_id, ai.user_id,
                        u.full_name AS user_name,
                        ai.url, ai.thumbnail_url, ai.original_filename, ai.created_at
                 FROM asset_info ai
                 JOIN users u ON u.user_id = ai.user_id
-                WHERE ai.task_id = :taskId
+                WHERE ai.task_id IN (:taskIds)
                 ORDER BY ai.created_at ASC
                 """,
-                Map.of("taskId", taskId),
+                new MapSqlParameterSource("taskIds", taskIds),
                 AssetInfoRepository::map);
     }
 

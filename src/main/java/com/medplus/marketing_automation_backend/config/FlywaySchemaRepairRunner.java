@@ -45,6 +45,21 @@ public class FlywaySchemaRepairRunner implements CommandLineRunner {
         }
         ensureTaskTypeIdColumn();
         ensureActionDoneByColumn();
+        ensureCampaignColumns();
+        ensureWorkTaskColumns();
+        ensureTimestampsOnTable("users");
+        ensureTimestampsOnTable("granular_tasks");
+        ensureTimestampsOnTable("dynamic_questions");
+        ensureTimestampsOnTable("role_task_mapping");
+        ensureTimestampsOnTable("requirement_role_mapping");
+        ensureMasterTableTimestamps();
+
+        // Ensure new tables introduced in V6 and V7 exist on every system.
+        // This is a safety net for environments where Flyway skipped those
+        // migrations (e.g. orphaned V3/V4 history entries caused ordering issues).
+        purgeOrphanedFlywayEntries();
+        ensureAutoCreatedTasksTable();
+        ensureQcRoutingTable();
     }
 
     private void repairFullWipe() {
@@ -135,6 +150,110 @@ public class FlywaySchemaRepairRunner implements CommandLineRunner {
     }
 
     /**
+     * Ensures campaigns table has rejection_reason, created_at, and updated_at columns.
+     * These were added to the V1 schema but may be absent in older deployed databases.
+     */
+    private void ensureCampaignColumns() {
+        try {
+            if (!columnExists("campaigns", "rejection_reason")) {
+                jdbc.execute("ALTER TABLE campaigns ADD COLUMN rejection_reason VARCHAR(1000) NULL");
+                log.info("FlywaySchemaRepairRunner: added rejection_reason to campaigns.");
+            }
+            if (!columnExists("campaigns", "created_at")) {
+                jdbc.execute("ALTER TABLE campaigns ADD COLUMN created_at TIMESTAMP NULL DEFAULT CURRENT_TIMESTAMP");
+                log.info("FlywaySchemaRepairRunner: added created_at to campaigns.");
+            }
+            if (!columnExists("campaigns", "updated_at")) {
+                jdbc.execute("ALTER TABLE campaigns ADD COLUMN updated_at TIMESTAMP NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP");
+                log.info("FlywaySchemaRepairRunner: added updated_at to campaigns.");
+            }
+        } catch (Exception e) {
+            log.error("FlywaySchemaRepairRunner: ensureCampaignColumns failed — {}", e.getMessage());
+        }
+    }
+
+    /**
+     * Ensures work_tasks has created_at/updated_at columns and that its status ENUM
+     * includes the REJECTED value added when QC-rejection logic was introduced.
+     */
+    private void ensureWorkTaskColumns() {
+        try {
+            if (!columnExists("work_tasks", "created_at")) {
+                jdbc.execute("ALTER TABLE work_tasks ADD COLUMN created_at TIMESTAMP NULL DEFAULT CURRENT_TIMESTAMP");
+                log.info("FlywaySchemaRepairRunner: added created_at to work_tasks.");
+            }
+            if (!columnExists("work_tasks", "updated_at")) {
+                jdbc.execute("ALTER TABLE work_tasks ADD COLUMN updated_at TIMESTAMP NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP");
+                log.info("FlywaySchemaRepairRunner: added updated_at to work_tasks.");
+            }
+            // Extend the status ENUM to include REJECTED (idempotent — MySQL ignores if already present)
+            jdbc.execute("ALTER TABLE work_tasks MODIFY COLUMN status "
+                    + "ENUM('ASSIGNED','ACCEPTED','IN_PROGRESS','QC_REVIEW','REWORK',"
+                    + "'COMPLETED','HELD','CANCELLED','REJECTED') NOT NULL DEFAULT 'ASSIGNED'");
+            log.info("FlywaySchemaRepairRunner: work_tasks status ENUM extended to include REJECTED.");
+        } catch (Exception e) {
+            log.error("FlywaySchemaRepairRunner: ensureWorkTaskColumns failed — {}", e.getMessage());
+        }
+    }
+
+    /**
+     * Generic helper: adds created_at and updated_at to any named table if absent.
+     */
+    private void ensureTimestampsOnTable(String table) {
+        try {
+            if (!columnExists(table, "created_at")) {
+                jdbc.execute("ALTER TABLE `" + table + "` ADD COLUMN created_at TIMESTAMP NULL DEFAULT CURRENT_TIMESTAMP");
+                log.info("FlywaySchemaRepairRunner: added created_at to {}.", table);
+            }
+            if (!columnExists(table, "updated_at")) {
+                jdbc.execute("ALTER TABLE `" + table + "` ADD COLUMN updated_at TIMESTAMP NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP");
+                log.info("FlywaySchemaRepairRunner: added updated_at to {}.", table);
+            }
+        } catch (Exception e) {
+            log.error("FlywaySchemaRepairRunner: ensureTimestampsOnTable({}) failed — {}", table, e.getMessage());
+        }
+    }
+
+    /** Adds created_at / updated_at to all master lookup tables. */
+    private void ensureMasterTableTimestamps() {
+        String[] masterTables = {
+            "departments", "roles", "designations", "regions", "task_types",
+            "audiences", "languages", "tones", "offer_types", "supporting_proofs",
+            "budget_tiers", "kpi_types", "expected_outputs", "business_objectives",
+            "vendor_types"
+        };
+        for (String t : masterTables) {
+            if (tableExists(t)) {
+                ensureTimestampsOnTable(t);
+                backfillNullTimestamps(t);
+            }
+        }
+    }
+
+    /**
+     * After adding created_at / updated_at to an existing table the new column
+     * defaults to CURRENT_TIMESTAMP for future rows but existing rows that were
+     * inserted before the ALTER may still be NULL (depending on MySQL strict mode
+     * and the DEFAULT clause applied).  This sets a stable seed value so ORDER BY
+     * and NOT NULL constraints work correctly.
+     */
+    private void backfillNullTimestamps(String table) {
+        try {
+            int updated = jdbc.update(
+                "UPDATE `" + table + "` "
+                + "SET created_at = '2024-01-15 10:00:00' WHERE created_at IS NULL");
+            if (updated > 0) {
+                jdbc.update(
+                    "UPDATE `" + table + "` "
+                    + "SET updated_at = created_at WHERE updated_at IS NULL");
+                log.info("FlywaySchemaRepairRunner: back-filled timestamps for {} row(s) in {}.", updated, table);
+            }
+        } catch (Exception e) {
+            log.warn("FlywaySchemaRepairRunner: backfillNullTimestamps({}) — {}", table, e.getMessage());
+        }
+    }
+
+    /**
      * Idempotent: extends the approvals_log.action_taken ENUM to include HELD and UNHOLD.
      * Safe to run every startup — MySQL silently ignores repeated MODIFY when the definition
      * is already correct.
@@ -146,6 +265,105 @@ public class FlywaySchemaRepairRunner implements CommandLineRunner {
             log.info("FlywaySchemaRepairRunner: approvals_log action_taken ENUM extended (HELD/UNHOLD).");
         } catch (Exception e) {
             log.error("FlywaySchemaRepairRunner: approvals_log ENUM extension failed — {}", e.getMessage());
+        }
+    }
+
+    /**
+     * Removes flyway_schema_history records whose migration files no longer exist
+     * on disk (V3 and V4). Keeping them as orphans can cause Flyway to mark
+     * subsequent migrations as "out of order" and skip them silently.
+     */
+    private void purgeOrphanedFlywayEntries() {
+        try {
+            String[] orphanedVersions = {"3", "4"};
+            for (String v : orphanedVersions) {
+                int deleted = jdbc.update(
+                    "DELETE FROM flyway_schema_history WHERE version = ?", v);
+                if (deleted > 0) {
+                    log.info("FlywaySchemaRepairRunner: removed orphaned flyway_schema_history entry for V{}.", v);
+                }
+            }
+        } catch (Exception e) {
+            log.warn("FlywaySchemaRepairRunner: could not purge orphaned flyway entries — {}", e.getMessage());
+        }
+    }
+
+    /**
+     * Creates the auto_created_tasks table if it does not yet exist (V6 migration).
+     * Also registers it in flyway_schema_history so Flyway does not try to re-run V6.
+     */
+    private void ensureAutoCreatedTasksTable() {
+        try {
+            if (!tableExists("auto_created_tasks")) {
+                jdbc.execute(
+                    "CREATE TABLE IF NOT EXISTS auto_created_tasks ("
+                    + "  auto_created_task_id     BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,"
+                    + "  source_task_id           VARCHAR(32)     NOT NULL,"
+                    + "  created_task_id          VARCHAR(32)     NOT NULL,"
+                    + "  campaign_id              INT             NOT NULL,"
+                    + "  source_granular_task_id  VARCHAR(20)     NULL,"
+                    + "  content_granular_task_id VARCHAR(20)     NOT NULL,"
+                    + "  requested_by_user_id     INT UNSIGNED    NOT NULL,"
+                    + "  content_assignee_user_id INT UNSIGNED    NULL,"
+                    + "  status ENUM('REQUESTED','IN_PROGRESS','COMPLETED','CANCELLED') NOT NULL DEFAULT 'REQUESTED',"
+                    + "  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,"
+                    + "  updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,"
+                    + "  UNIQUE KEY uk_auto_created_source (source_task_id),"
+                    + "  UNIQUE KEY uk_auto_created_child  (created_task_id),"
+                    + "  CONSTRAINT fk_auto_created_source FOREIGN KEY (source_task_id)  REFERENCES work_tasks(task_id) ON DELETE CASCADE,"
+                    + "  CONSTRAINT fk_auto_created_child  FOREIGN KEY (created_task_id) REFERENCES work_tasks(task_id) ON DELETE CASCADE"
+                    + ") ENGINE=InnoDB");
+                log.info("FlywaySchemaRepairRunner: auto_created_tasks table created.");
+            }
+            registerFlywayEntry(6, "6", "auto created tasks", "V6__auto_created_tasks.sql");
+        } catch (Exception e) {
+            log.error("FlywaySchemaRepairRunner: ensureAutoCreatedTasksTable failed — {}", e.getMessage());
+        }
+    }
+
+    /**
+     * Creates the qc_routing table if it does not yet exist (V7 migration).
+     * Also registers it in flyway_schema_history so Flyway does not try to re-run V7.
+     */
+    private void ensureQcRoutingTable() {
+        try {
+            if (!tableExists("qc_routing")) {
+                jdbc.execute(
+                    "CREATE TABLE IF NOT EXISTS qc_routing ("
+                    + "  id              INT         NOT NULL AUTO_INCREMENT PRIMARY KEY,"
+                    + "  worker_role_id  VARCHAR(20) NOT NULL,"
+                    + "  manager_role_id VARCHAR(20) NOT NULL,"
+                    + "  UNIQUE KEY uq_qc_routing (worker_role_id, manager_role_id),"
+                    + "  CONSTRAINT fk_qcr_worker  FOREIGN KEY (worker_role_id)  REFERENCES roles(role_id),"
+                    + "  CONSTRAINT fk_qcr_manager FOREIGN KEY (manager_role_id) REFERENCES roles(role_id)"
+                    + ") ENGINE=InnoDB");
+                log.info("FlywaySchemaRepairRunner: qc_routing table created.");
+            }
+            registerFlywayEntry(7, "7", "qc routing", "V7__qc_routing.sql");
+        } catch (Exception e) {
+            log.error("FlywaySchemaRepairRunner: ensureQcRoutingTable failed — {}", e.getMessage());
+        }
+    }
+
+    /**
+     * Inserts a Flyway history record (success=1) if that version is not already present.
+     * Prevents Flyway from trying to re-run a migration that was applied by this runner.
+     */
+    private void registerFlywayEntry(int rank, String version, String description, String script) {
+        try {
+            Integer exists = jdbc.queryForObject(
+                "SELECT COUNT(*) FROM flyway_schema_history WHERE version = ?",
+                Integer.class, version);
+            if (exists == null || exists == 0) {
+                jdbc.update(
+                    "INSERT INTO flyway_schema_history "
+                    + "(installed_rank, version, description, type, script, checksum, installed_by, installed_on, execution_time, success) "
+                    + "VALUES (?, ?, ?, 'SQL', ?, 0, 'repair-runner', NOW(), 0, 1)",
+                    rank, version, description, script);
+                log.info("FlywaySchemaRepairRunner: registered V{} ({}) in flyway_schema_history.", version, script);
+            }
+        } catch (Exception e) {
+            log.warn("FlywaySchemaRepairRunner: could not register V{} in flyway_schema_history — {}", version, e.getMessage());
         }
     }
 
@@ -164,6 +382,14 @@ public class FlywaySchemaRepairRunner implements CommandLineRunner {
                 "SELECT COUNT(*) FROM information_schema.TABLES "
                         + "WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ?",
                 Integer.class, tableName);
+        return n != null && n > 0;
+    }
+
+    private boolean columnExists(String tableName, String columnName) {
+        Integer n = jdbc.queryForObject(
+                "SELECT COUNT(*) FROM information_schema.COLUMNS "
+                        + "WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? AND COLUMN_NAME = ?",
+                Integer.class, tableName, columnName);
         return n != null && n > 0;
     }
 }

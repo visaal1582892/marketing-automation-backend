@@ -46,12 +46,31 @@ public class MasterDataController {
                 .toList();
     }
 
-    /** List master items — any authenticated user can read (required for form dropdowns). */
+    /**
+     * List master items.
+     * Without page/size returns the full list (used by form dropdowns — backward compatible).
+     * With page/size returns a PagedResponse for the admin management table.
+     * Optional filters: id (partial match), name (partial match), status (ACTIVE/INACTIVE/all).
+     */
     @GetMapping("/{resource}")
     @PreAuthorize("isAuthenticated()")
-    public List<MasterItem> list(@PathVariable String resource,
-                                 @RequestParam(name = "includeInactive", required = false,
-                                               defaultValue = "false") boolean includeInactive) {
+    public Object list(@PathVariable String resource,
+                       @RequestParam(name = "includeInactive", required = false,
+                                     defaultValue = "false") boolean includeInactive,
+                       @RequestParam(required = false) String id,
+                       @RequestParam(required = false) String name,
+                       @RequestParam(required = false) String status,
+                       @RequestParam(required = false) Integer page,
+                       @RequestParam(required = false) Integer size) {
+        if (page != null || size != null) {
+            // Paged mode: admin table view
+            String effectiveStatus = (status != null && !status.isBlank()) ? status
+                    : (includeInactive ? "all" : "ACTIVE");
+            return service.listPaged(resource, id, name, effectiveStatus,
+                                     page != null ? page : 0,
+                                     size != null ? size : 20);
+        }
+        // Legacy mode: full list for form dropdowns
         return service.list(resource, includeInactive);
     }
 

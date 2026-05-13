@@ -201,18 +201,18 @@ public class CampaignRepository {
     }
 
     public List<Campaign> findAll(boolean includeInactive) {
-        return jdbc.query(SELECT_BASE + " ORDER BY c.campaign_id DESC",
+        return jdbc.query(SELECT_BASE + " ORDER BY COALESCE(c.updated_at, c.created_at) DESC",
                 CampaignRepository::map);
     }
 
     public List<Campaign> findByRequestorId(int requestorId) {
-        return jdbc.query(SELECT_BASE + " WHERE c.requestor_id = :id ORDER BY c.campaign_id DESC",
+        return jdbc.query(SELECT_BASE + " WHERE c.requestor_id = :id ORDER BY COALESCE(c.updated_at, c.created_at) DESC",
                 new MapSqlParameterSource("id", requestorId),
                 CampaignRepository::map);
     }
 
     public List<Campaign> findByStatus(CampaignStatus status) {
-        return jdbc.query(SELECT_BASE + " WHERE c.status = :status ORDER BY c.campaign_id DESC",
+        return jdbc.query(SELECT_BASE + " WHERE c.status = :status ORDER BY COALESCE(c.updated_at, c.created_at) DESC",
                 new MapSqlParameterSource("status", status.name()),
                 CampaignRepository::map);
     }
@@ -386,6 +386,7 @@ public class CampaignRepository {
     public PagedResponse<Campaign> findByRequestorIdPaged(
             int requestorId,
             String campaignId, String status, String priority,
+            String taskType,
             LocalDate dateFrom, LocalDate dateTo,
             int page, int size) {
 
@@ -406,6 +407,24 @@ public class CampaignRepository {
             conds.add("c.priority = :priority");
             params.addValue("priority", priority.trim());
         }
+        if (taskType != null && !taskType.isBlank()) {
+            // Match campaigns whose primary task type OR any deliverable's task type equals the selected name
+            conds.add("""
+                    EXISTS (
+                        SELECT 1 FROM task_types tt
+                        WHERE tt.task_name = :taskType
+                        AND (
+                            tt.task_type_id = c.task_type_id
+                            OR EXISTS (
+                                SELECT 1 FROM campaign_deliverables cd
+                                JOIN granular_tasks gt ON gt.task_id = cd.granular_task_id
+                                WHERE gt.task_type_id = tt.task_type_id
+                                AND cd.campaign_id = c.campaign_id
+                            )
+                        )
+                    )""");
+            params.addValue("taskType", taskType.trim());
+        }
         if (dateFrom != null) {
             conds.add("c.created_at >= :dateFrom");
             params.addValue("dateFrom", dateFrom.atStartOfDay());
@@ -422,7 +441,7 @@ public class CampaignRepository {
 
         params.addValue("_size", size).addValue("_offset", (long) page * size);
         List<Campaign> content = jdbc.query(
-                SELECT_BASE + where + " ORDER BY c.campaign_id DESC LIMIT :_size OFFSET :_offset",
+                SELECT_BASE + where + " ORDER BY COALESCE(c.updated_at, c.created_at) DESC LIMIT :_size OFFSET :_offset",
                 params, CampaignRepository::map);
 
         return PagedResponse.of(content, total, page, size);

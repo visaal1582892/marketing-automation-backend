@@ -51,6 +51,7 @@ public class CampaignController {
             @RequestParam(required = false) String campaignId,
             @RequestParam(required = false) String status,
             @RequestParam(required = false) String priority,
+            @RequestParam(required = false) String taskType,
             @RequestParam(required = false) String dateFrom,
             @RequestParam(required = false) String dateTo,
             @RequestParam(defaultValue = "0")  int page,
@@ -59,7 +60,7 @@ public class CampaignController {
         int requestorId = principal.getUser().getUserId().intValue();
         LocalDate from = dateFrom != null && !dateFrom.isBlank() ? LocalDate.parse(dateFrom) : null;
         LocalDate to   = dateTo   != null && !dateTo.isBlank()   ? LocalDate.parse(dateTo)   : null;
-        return campaignService.listMyPaged(requestorId, campaignId, status, priority, from, to, page, size);
+        return campaignService.listMyPaged(requestorId, campaignId, status, priority, taskType, from, to, page, size);
     }
 
     /**

@@ -1,6 +1,7 @@
 package com.medplus.marketing_automation_backend.repository;
 
 import com.medplus.marketing_automation_backend.domain.MasterItem;
+import com.medplus.marketing_automation_backend.dto.PagedResponse;
 import com.medplus.marketing_automation_backend.enums.MasterTableType;
 import com.medplus.marketing_automation_backend.enums.RecordStatus;
 import org.springframework.dao.EmptyResultDataAccessException;
@@ -11,6 +12,7 @@ import org.springframework.stereotype.Repository;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 
@@ -38,8 +40,50 @@ public class MasterDataRepository {
                 + type.nameColumn() + " AS name, status "
                 + "FROM " + type.tableName()
                 + (includeInactive ? "" : " WHERE status = 'ACTIVE'")
-                + " ORDER BY CAST(" + type.idColumn() + " AS UNSIGNED) ASC";
+                + " ORDER BY COALESCE(updated_at, created_at) DESC";
         return jdbc.query(sql, mapper());
+    }
+
+    /**
+     * Paged + filtered list of master items for the admin management table.
+     * Supports filtering by id prefix, name substring, and status.
+     * Ordered last-modified-first; falls back to created_at for rows that
+     * have never been updated (updated_at == created_at is fine — still correct).
+     */
+    public PagedResponse<MasterItem> findAllPaged(MasterTableType type,
+                                                   String id, String name, String status,
+                                                   int page, int size) {
+        MapSqlParameterSource params = new MapSqlParameterSource();
+        List<String> conds = new ArrayList<>();
+
+        if (id != null && !id.isBlank()) {
+            conds.add("CAST(" + type.idColumn() + " AS CHAR) LIKE :id");
+            params.addValue("id", "%" + id.trim() + "%");
+        }
+        if (name != null && !name.isBlank()) {
+            conds.add(type.nameColumn() + " LIKE :name");
+            params.addValue("name", "%" + name.trim() + "%");
+        }
+        if (status != null && !status.isBlank() && !"all".equalsIgnoreCase(status)) {
+            conds.add("status = :status");
+            params.addValue("status", status.trim().toUpperCase());
+        }
+
+        String where = conds.isEmpty() ? "" : " WHERE " + String.join(" AND ", conds);
+        String base  = "FROM " + type.tableName() + where;
+
+        Long total = jdbc.queryForObject("SELECT COUNT(*) " + base, params, Long.class);
+        if (total == null) total = 0L;
+
+        String selectSql = "SELECT " + type.idColumn() + " AS id, "
+                + type.nameColumn() + " AS name, status "
+                + base
+                + " ORDER BY COALESCE(updated_at, created_at) DESC"
+                + " LIMIT :_size OFFSET :_offset";
+        params.addValue("_size", size).addValue("_offset", (long) page * size);
+        List<MasterItem> content = jdbc.query(selectSql, params, mapper());
+
+        return PagedResponse.of(content, total, page, size);
     }
 
     public Optional<MasterItem> findById(MasterTableType type, String id) {

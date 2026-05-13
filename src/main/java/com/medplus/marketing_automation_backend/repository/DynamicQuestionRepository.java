@@ -1,6 +1,7 @@
 package com.medplus.marketing_automation_backend.repository;
 
 import com.medplus.marketing_automation_backend.domain.DynamicQuestion;
+import com.medplus.marketing_automation_backend.dto.PagedResponse;
 import com.medplus.marketing_automation_backend.enums.FieldType;
 import org.springframework.dao.EmptyResultDataAccessException;
 import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
@@ -9,7 +10,9 @@ import org.springframework.stereotype.Repository;
 
 import java.sql.ResultSet;
 import java.sql.SQLException;
+import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 
 /**
@@ -69,14 +72,14 @@ public class DynamicQuestionRepository {
     }
 
     public List<DynamicQuestion> findAll() {
-        return jdbc.query("SELECT * FROM dynamic_questions ORDER BY question_id",
+        return jdbc.query("SELECT * FROM dynamic_questions ORDER BY COALESCE(updated_at, created_at) DESC",
                 DynamicQuestionRepository::map);
     }
 
     /**
      * All questions with mapped granular task IDs and names (GROUP_CONCAT) for admin UI.
      */
-    public List<java.util.Map<String, Object>> findAllWithMappings() {
+    public List<Map<String, Object>> findAllWithMappings() {
         return jdbc.queryForList("""
                 SELECT dq.question_id,
                        dq.question_text,
@@ -89,9 +92,50 @@ public class DynamicQuestionRepository {
                   LEFT JOIN task_question_mapping tqm ON tqm.question_id    = dq.question_id
                   LEFT JOIN granular_tasks        gt  ON gt.task_id         = tqm.granular_task_id
                  GROUP BY dq.question_id, dq.question_text, dq.field_type, dq.options, dq.is_required
-                 ORDER BY dq.question_id
+                 ORDER BY COALESCE(dq.updated_at, dq.created_at) DESC
                 """,
                 new MapSqlParameterSource());
+    }
+
+    /** Paged + filtered questions with task mappings for the admin Question Library table. */
+    public PagedResponse<Map<String, Object>> findAllWithMappingsPaged(String questionText,
+                                                                         int page, int size) {
+        MapSqlParameterSource params = new MapSqlParameterSource();
+        List<String> havingConds = new ArrayList<>();
+
+        if (questionText != null && !questionText.isBlank()) {
+            havingConds.add("question_text LIKE :questionText");
+            params.addValue("questionText", "%" + questionText.trim() + "%");
+        }
+
+        String having = havingConds.isEmpty() ? "" : " HAVING " + String.join(" AND ", havingConds);
+
+        String baseSql = """
+                SELECT dq.question_id,
+                       dq.question_text,
+                       dq.field_type,
+                       dq.options,
+                       dq.is_required,
+                       GROUP_CONCAT(tqm.granular_task_id ORDER BY tqm.granular_task_id SEPARATOR ',')  AS task_ids,
+                       GROUP_CONCAT(gt.task_name         ORDER BY tqm.granular_task_id SEPARATOR '||') AS task_names
+                  FROM dynamic_questions dq
+                  LEFT JOIN task_question_mapping tqm ON tqm.question_id    = dq.question_id
+                  LEFT JOIN granular_tasks        gt  ON gt.task_id         = tqm.granular_task_id
+                 GROUP BY dq.question_id, dq.question_text, dq.field_type, dq.options, dq.is_required
+                """ + having;
+
+        Long total = jdbc.queryForObject(
+                "SELECT COUNT(*) FROM (" + baseSql + ") AS counted",
+                params, Long.class);
+        if (total == null) total = 0L;
+
+        params.addValue("_size", size).addValue("_offset", (long) page * size);
+        List<Map<String, Object>> content = jdbc.queryForList(
+                baseSql + " ORDER BY COALESCE(dq.updated_at, dq.created_at) DESC"
+                        + " LIMIT :_size OFFSET :_offset",
+                params);
+
+        return PagedResponse.of(content, total, page, size);
     }
 
     public int update(DynamicQuestion q) {

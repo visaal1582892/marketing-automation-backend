@@ -14,97 +14,129 @@ SET FOREIGN_KEY_CHECKS = 0;
 CREATE TABLE IF NOT EXISTS departments (
     department_id    VARCHAR(20)               NOT NULL PRIMARY KEY,
     department_name  VARCHAR(200)              NOT NULL UNIQUE,
-    status           ENUM('ACTIVE','INACTIVE') NOT NULL DEFAULT 'ACTIVE'
+    status           ENUM('ACTIVE','INACTIVE') NOT NULL DEFAULT 'ACTIVE',
+    created_at       TIMESTAMP                 NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at       TIMESTAMP                 NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
 ) ENGINE=InnoDB;
 
 CREATE TABLE IF NOT EXISTS roles (
     role_id    VARCHAR(20)               NOT NULL PRIMARY KEY,
     role_name  VARCHAR(200)              NOT NULL UNIQUE,
-    status     ENUM('ACTIVE','INACTIVE') NOT NULL DEFAULT 'ACTIVE'
+    status     ENUM('ACTIVE','INACTIVE') NOT NULL DEFAULT 'ACTIVE',
+    created_at TIMESTAMP                 NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP                 NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
 ) ENGINE=InnoDB;
 
 CREATE TABLE IF NOT EXISTS designations (
     designation_id    VARCHAR(20)               NOT NULL PRIMARY KEY,
     designation_name  VARCHAR(200)              NOT NULL UNIQUE,
-    status            ENUM('ACTIVE','INACTIVE') NOT NULL DEFAULT 'ACTIVE'
+    status            ENUM('ACTIVE','INACTIVE') NOT NULL DEFAULT 'ACTIVE',
+    created_at        TIMESTAMP                 NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at        TIMESTAMP                 NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
 ) ENGINE=InnoDB;
 
 CREATE TABLE IF NOT EXISTS requirement_types (
     requirement_type_id  VARCHAR(20)               NOT NULL PRIMARY KEY,
     requirement_name     VARCHAR(200)              NOT NULL UNIQUE,
-    status               ENUM('ACTIVE','INACTIVE') NOT NULL DEFAULT 'ACTIVE'
+    status               ENUM('ACTIVE','INACTIVE') NOT NULL DEFAULT 'ACTIVE',
+    created_at           TIMESTAMP                 NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at           TIMESTAMP                 NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
 ) ENGINE=InnoDB;
 
 CREATE TABLE IF NOT EXISTS task_types (
     task_type_id  VARCHAR(20)               NOT NULL PRIMARY KEY,
     task_name     VARCHAR(200)              NOT NULL UNIQUE,
-    status        ENUM('ACTIVE','INACTIVE') NOT NULL DEFAULT 'ACTIVE'
+    status        ENUM('ACTIVE','INACTIVE') NOT NULL DEFAULT 'ACTIVE',
+    created_at    TIMESTAMP                 NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at    TIMESTAMP                 NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
 ) ENGINE=InnoDB;
 
 CREATE TABLE IF NOT EXISTS regions (
     region_id    VARCHAR(20)               NOT NULL PRIMARY KEY,
     region_name  VARCHAR(200)              NOT NULL UNIQUE,
-    status       ENUM('ACTIVE','INACTIVE') NOT NULL DEFAULT 'ACTIVE'
+    status       ENUM('ACTIVE','INACTIVE') NOT NULL DEFAULT 'ACTIVE',
+    created_at   TIMESTAMP                 NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at   TIMESTAMP                 NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
 ) ENGINE=InnoDB;
 
 CREATE TABLE IF NOT EXISTS audiences (
     audience_id    VARCHAR(20)               NOT NULL PRIMARY KEY,
     audience_name  VARCHAR(200)              NOT NULL UNIQUE,
-    status         ENUM('ACTIVE','INACTIVE') NOT NULL DEFAULT 'ACTIVE'
+    status         ENUM('ACTIVE','INACTIVE') NOT NULL DEFAULT 'ACTIVE',
+    created_at     TIMESTAMP                 NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at     TIMESTAMP                 NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
 ) ENGINE=InnoDB;
 
 CREATE TABLE IF NOT EXISTS offer_types (
     offer_type_id    VARCHAR(20)               NOT NULL PRIMARY KEY,
     offer_type_name  VARCHAR(200)              NOT NULL UNIQUE,
-    status           ENUM('ACTIVE','INACTIVE') NOT NULL DEFAULT 'ACTIVE'
+    status           ENUM('ACTIVE','INACTIVE') NOT NULL DEFAULT 'ACTIVE',
+    created_at       TIMESTAMP                 NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at       TIMESTAMP                 NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
 ) ENGINE=InnoDB;
 
 CREATE TABLE IF NOT EXISTS vendor_types (
     vendor_type_id    VARCHAR(20)               NOT NULL PRIMARY KEY,
     vendor_type_name  VARCHAR(200)              NOT NULL UNIQUE,
-    status            ENUM('ACTIVE','INACTIVE') NOT NULL DEFAULT 'ACTIVE'
+    status            ENUM('ACTIVE','INACTIVE') NOT NULL DEFAULT 'ACTIVE',
+    created_at        TIMESTAMP                 NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at        TIMESTAMP                 NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
 ) ENGINE=InnoDB;
 
 CREATE TABLE IF NOT EXISTS business_objectives (
     business_objective_id    VARCHAR(20)               NOT NULL PRIMARY KEY,
     business_objective_name  VARCHAR(200)              NOT NULL UNIQUE,
-    status                   ENUM('ACTIVE','INACTIVE') NOT NULL DEFAULT 'ACTIVE'
+    status                   ENUM('ACTIVE','INACTIVE') NOT NULL DEFAULT 'ACTIVE',
+    created_at               TIMESTAMP                 NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at               TIMESTAMP                 NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
 ) ENGINE=InnoDB;
 
 CREATE TABLE IF NOT EXISTS languages (
     language_id    VARCHAR(20)               NOT NULL PRIMARY KEY,
     language_name  VARCHAR(200)              NOT NULL UNIQUE,
-    status         ENUM('ACTIVE','INACTIVE') NOT NULL DEFAULT 'ACTIVE'
+    status         ENUM('ACTIVE','INACTIVE') NOT NULL DEFAULT 'ACTIVE',
+    created_at     TIMESTAMP                 NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at     TIMESTAMP                 NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
 ) ENGINE=InnoDB;
 
 CREATE TABLE IF NOT EXISTS tones (
     tone_id    VARCHAR(20)               NOT NULL PRIMARY KEY,
     tone_name  VARCHAR(200)              NOT NULL UNIQUE,
-    status     ENUM('ACTIVE','INACTIVE') NOT NULL DEFAULT 'ACTIVE'
+    status     ENUM('ACTIVE','INACTIVE') NOT NULL DEFAULT 'ACTIVE',
+    created_at TIMESTAMP                 NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP                 NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
 ) ENGINE=InnoDB;
 
 CREATE TABLE IF NOT EXISTS supporting_proofs (
     supporting_proof_id    VARCHAR(20)               NOT NULL PRIMARY KEY,
     supporting_proof_name  VARCHAR(200)              NOT NULL UNIQUE,
-    status                 ENUM('ACTIVE','INACTIVE') NOT NULL DEFAULT 'ACTIVE'
+    status                 ENUM('ACTIVE','INACTIVE') NOT NULL DEFAULT 'ACTIVE',
+    created_at             TIMESTAMP                 NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at             TIMESTAMP                 NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
 ) ENGINE=InnoDB;
 
 CREATE TABLE IF NOT EXISTS budget_tiers (
     budget_tier_id    VARCHAR(20)               NOT NULL PRIMARY KEY,
     budget_tier_name  VARCHAR(200)              NOT NULL UNIQUE,
-    status            ENUM('ACTIVE','INACTIVE') NOT NULL DEFAULT 'ACTIVE'
+    status            ENUM('ACTIVE','INACTIVE') NOT NULL DEFAULT 'ACTIVE',
+    created_at        TIMESTAMP                 NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at        TIMESTAMP                 NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
 ) ENGINE=InnoDB;
 
 CREATE TABLE IF NOT EXISTS kpi_types (
     kpi_type_id    VARCHAR(20)               NOT NULL PRIMARY KEY,
     kpi_type_name  VARCHAR(200)              NOT NULL UNIQUE,
-    status         ENUM('ACTIVE','INACTIVE') NOT NULL DEFAULT 'ACTIVE'
+    status         ENUM('ACTIVE','INACTIVE') NOT NULL DEFAULT 'ACTIVE',
+    created_at     TIMESTAMP                 NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at     TIMESTAMP                 NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
 ) ENGINE=InnoDB;
 
 CREATE TABLE IF NOT EXISTS expected_outputs (
     expected_output_id    VARCHAR(20)               NOT NULL PRIMARY KEY,
     expected_output_name  VARCHAR(200)              NOT NULL UNIQUE,
-    status                ENUM('ACTIVE','INACTIVE') NOT NULL DEFAULT 'ACTIVE'
+    status                ENUM('ACTIVE','INACTIVE') NOT NULL DEFAULT 'ACTIVE',
+    created_at            TIMESTAMP                 NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at            TIMESTAMP                 NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
 ) ENGINE=InnoDB;
 
 -- =============================================================================
@@ -117,6 +149,8 @@ CREATE TABLE IF NOT EXISTS granular_tasks (
     task_type_id   VARCHAR(20)               NOT NULL,
     task_category  VARCHAR(100),
     status         ENUM('ACTIVE','INACTIVE') NOT NULL DEFAULT 'ACTIVE',
+    created_at     TIMESTAMP                 NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at     TIMESTAMP                 NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     CONSTRAINT fk_gt_task_type FOREIGN KEY (task_type_id)
         REFERENCES task_types(task_type_id) ON DELETE RESTRICT
 ) ENGINE=InnoDB;
@@ -130,6 +164,8 @@ CREATE TABLE IF NOT EXISTS requirement_role_mapping (
     requirement_type_id  VARCHAR(20)               NOT NULL,
     default_role_id      VARCHAR(20)               NOT NULL,
     status               ENUM('ACTIVE','INACTIVE') NOT NULL DEFAULT 'ACTIVE',
+    created_at           TIMESTAMP                 NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at           TIMESTAMP                 NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     UNIQUE KEY uq_req_role (requirement_type_id),
     CONSTRAINT fk_rrm_req  FOREIGN KEY (requirement_type_id)
         REFERENCES requirement_types(requirement_type_id) ON DELETE CASCADE,
@@ -142,6 +178,8 @@ CREATE TABLE IF NOT EXISTS role_task_mapping (
     role_id     VARCHAR(20)               NOT NULL,
     task_id     VARCHAR(20)               NOT NULL,
     status      ENUM('ACTIVE','INACTIVE') NOT NULL DEFAULT 'ACTIVE',
+    created_at  TIMESTAMP                 NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at  TIMESTAMP                 NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     UNIQUE KEY uq_role_task (role_id, task_id),
     CONSTRAINT fk_rtm_role FOREIGN KEY (role_id)
         REFERENCES roles(role_id) ON DELETE CASCADE,
@@ -164,6 +202,7 @@ CREATE TABLE IF NOT EXISTS users (
     current_active_tasks   INT                       DEFAULT 0,
     status                 ENUM('ACTIVE','INACTIVE') NOT NULL DEFAULT 'ACTIVE',
     created_at             TIMESTAMP                 DEFAULT CURRENT_TIMESTAMP,
+    updated_at             TIMESTAMP                 DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     CONSTRAINT fk_users_dept        FOREIGN KEY (department_id)   REFERENCES departments(department_id) ON DELETE CASCADE,
     CONSTRAINT fk_users_designation FOREIGN KEY (designation_id)  REFERENCES designations(designation_id) ON DELETE CASCADE
 ) ENGINE=InnoDB;
@@ -252,7 +291,7 @@ CREATE TABLE IF NOT EXISTS work_tasks (
     status                     ENUM(
                                    'ASSIGNED','ACCEPTED','IN_PROGRESS',
                                    'QC_REVIEW','REWORK','COMPLETED',
-                                   'HELD','CANCELLED'
+                                   'HELD','CANCELLED','REJECTED'
                                )             NOT NULL DEFAULT 'ASSIGNED',
     pre_hold_status            VARCHAR(20)   NULL,
     assigned_at                TIMESTAMP     NULL,
@@ -300,7 +339,9 @@ CREATE TABLE IF NOT EXISTS dynamic_questions (
                        'DROPDOWN','MULTISELECT','DATE',
                        'FILE','CHECKBOX')                  NOT NULL DEFAULT 'TEXT',
     options       JSON,
-    is_required   TINYINT(1)                              NOT NULL DEFAULT 0
+    is_required   TINYINT(1)                              NOT NULL DEFAULT 0,
+    created_at    TIMESTAMP                               NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at    TIMESTAMP                               NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
 ) ENGINE=InnoDB;
 
 CREATE TABLE IF NOT EXISTS task_question_mapping (

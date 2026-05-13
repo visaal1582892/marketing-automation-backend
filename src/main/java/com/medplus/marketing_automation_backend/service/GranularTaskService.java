@@ -1,6 +1,7 @@
 package com.medplus.marketing_automation_backend.service;
 
 import com.medplus.marketing_automation_backend.domain.GranularTask;
+import com.medplus.marketing_automation_backend.dto.PagedResponse;
 import com.medplus.marketing_automation_backend.exception.BadRequestException;
 import com.medplus.marketing_automation_backend.exception.ResourceNotFoundException;
 import com.medplus.marketing_automation_backend.repository.GranularTaskRepository;
@@ -23,6 +24,12 @@ public class GranularTaskService {
 
     public List<GranularTask> listByTaskType(String taskTypeId) {
         return repo.findByTaskType(taskTypeId);
+    }
+
+    public PagedResponse<GranularTask> listPaged(String taskId, String taskName,
+                                                  String taskTypeName, String status,
+                                                  int page, int size) {
+        return repo.findAllPaged(taskId, taskName, taskTypeName, status, page, size);
     }
 
     public GranularTask get(String id) {

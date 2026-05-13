@@ -37,12 +37,29 @@ public class GranularTaskController {
         this.questionnaireService   = questionnaireService;
     }
 
-    /** Any authenticated user can read tasks — needed by the Smart Form. */
+    /**
+     * List granular tasks.
+     * Without page/size: returns full list (used by Smart Form dropdowns).
+     * With page/size: returns PagedResponse for the admin Granular Tasks table.
+     */
     @GetMapping
     @PreAuthorize("isAuthenticated()")
-    public List<GranularTask> list(
+    public Object list(
             @RequestParam(required = false, defaultValue = "false") boolean includeInactive,
-            @RequestParam(required = false) String taskTypeId) {
+            @RequestParam(required = false) String taskTypeId,
+            @RequestParam(required = false) String taskId,
+            @RequestParam(required = false) String taskName,
+            @RequestParam(required = false) String taskTypeName,
+            @RequestParam(required = false) String status,
+            @RequestParam(required = false) Integer page,
+            @RequestParam(required = false) Integer size) {
+        if (page != null || size != null) {
+            String effectiveStatus = (status != null && !status.isBlank()) ? status
+                    : (includeInactive ? "all" : "ACTIVE");
+            return service.listPaged(taskId, taskName, taskTypeName, effectiveStatus,
+                                     page != null ? page : 0,
+                                     size != null ? size : 20);
+        }
         if (taskTypeId != null && !taskTypeId.isBlank()) {
             return service.listByTaskType(taskTypeId);
         }

@@ -1,5 +1,6 @@
 package com.medplus.marketing_automation_backend.controller;
 
+import com.medplus.marketing_automation_backend.domain.AssetInfo;
 import com.medplus.marketing_automation_backend.dto.TaskSubmissionRequest;
 import com.medplus.marketing_automation_backend.dto.WorkTaskResponse;
 import com.medplus.marketing_automation_backend.security.CustomUserDetails;
@@ -41,6 +42,20 @@ public class WorkTaskController {
     public WorkTaskResponse accept(@PathVariable String id,
                                    @AuthenticationPrincipal CustomUserDetails principal) {
         return workTaskService.accept(id, principal.getUser().getUserId().intValue());
+    }
+
+    /** Graphic designer requests supporting content from a content writer. */
+    @PostMapping("/{id}/request-content")
+    public WorkTaskResponse requestContent(@PathVariable String id,
+                                           @AuthenticationPrincipal CustomUserDetails principal) {
+        return workTaskService.requestContent(id, principal.getUser().getUserId().intValue());
+    }
+
+    /** Assets uploaded on the linked auto-created content task. */
+    @GetMapping("/{id}/content-deliverables")
+    public List<AssetInfo> contentDeliverables(@PathVariable String id,
+                                                 @AuthenticationPrincipal CustomUserDetails principal) {
+        return workTaskService.getContentDeliverables(id, principal.getUser().getUserId().intValue());
     }
 
     /**

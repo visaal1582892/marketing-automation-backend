@@ -2,12 +2,14 @@ package com.medplus.marketing_automation_backend.repository;
 
 import com.medplus.marketing_automation_backend.domain.RoleTask;
 import com.medplus.marketing_automation_backend.domain.RoutingRule;
+import com.medplus.marketing_automation_backend.dto.PagedResponse;
 import com.medplus.marketing_automation_backend.enums.RecordStatus;
 import org.springframework.dao.EmptyResultDataAccessException;
 import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 import org.springframework.stereotype.Repository;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 
@@ -31,7 +33,7 @@ public class RoutingConfigRepository {
                 FROM requirement_role_mapping m
                 JOIN requirement_types rt ON rt.requirement_type_id = m.requirement_type_id
                 JOIN roles r              ON r.role_id              = m.default_role_id
-                ORDER BY m.mapping_id
+                ORDER BY COALESCE(m.updated_at, m.created_at) DESC
                 """, (rs, rowNum) -> RoutingRule.builder()
                 .mappingId(rs.getInt("mapping_id"))
                 .requirementTypeId(rs.getString("requirement_type_id"))
@@ -102,8 +104,47 @@ public class RoutingConfigRepository {
                 FROM role_task_mapping m
                 JOIN roles          r  ON r.role_id  = m.role_id
                 JOIN granular_tasks gt ON gt.task_id = m.task_id
-                ORDER BY m.role_id, m.task_id
+                ORDER BY COALESCE(m.updated_at, m.created_at) DESC
                 """, roleTaskMapper());
+    }
+
+    /** Paged + filtered role-task mappings for the admin table. */
+    public PagedResponse<RoleTask> findAllRoleTaskMappingsPaged(String roleName, String taskName,
+                                                                  String status, int page, int size) {
+        MapSqlParameterSource params = new MapSqlParameterSource();
+        List<String> conds = new ArrayList<>();
+
+        if (roleName != null && !roleName.isBlank()) {
+            conds.add("r.role_name LIKE :roleName");
+            params.addValue("roleName", "%" + roleName.trim() + "%");
+        }
+        if (taskName != null && !taskName.isBlank()) {
+            conds.add("gt.task_name LIKE :taskName");
+            params.addValue("taskName", "%" + taskName.trim() + "%");
+        }
+        if (status != null && !status.isBlank() && !"all".equalsIgnoreCase(status)) {
+            conds.add("m.status = :status");
+            params.addValue("status", status.trim().toUpperCase());
+        }
+
+        String where = conds.isEmpty() ? "" : " WHERE " + String.join(" AND ", conds);
+        String from = """
+                FROM role_task_mapping m
+                JOIN roles          r  ON r.role_id  = m.role_id
+                JOIN granular_tasks gt ON gt.task_id = m.task_id
+                """;
+
+        Long total = jdbc.queryForObject("SELECT COUNT(*) " + from + where, params, Long.class);
+        if (total == null) total = 0L;
+
+        params.addValue("_size", size).addValue("_offset", (long) page * size);
+        List<RoleTask> content = jdbc.query(
+                "SELECT m.mapping_id, m.role_id, r.role_name, m.task_id, gt.task_name, m.status "
+                        + from + where
+                        + " ORDER BY COALESCE(m.updated_at, m.created_at) DESC LIMIT :_size OFFSET :_offset",
+                params, roleTaskMapper());
+
+        return PagedResponse.of(content, total, page, size);
     }
 
     /**
@@ -131,7 +172,7 @@ public class RoutingConfigRepository {
                 JOIN roles          r  ON r.role_id  = m.role_id
                 JOIN granular_tasks gt ON gt.task_id = m.task_id
                 WHERE m.role_id = :roleId
-                ORDER BY m.task_id
+                ORDER BY COALESCE(m.updated_at, m.created_at) DESC
                 """, new MapSqlParameterSource("roleId", roleId), roleTaskMapper());
     }
 
@@ -150,6 +191,16 @@ public class RoutingConfigRepository {
                 new MapSqlParameterSource()
                         .addValue("status", status.name())
                         .addValue("id", mappingId));
+    }
+
+    public int updateRoleTaskMapping(int mappingId, String roleId, String taskId, RecordStatus status) {
+        return jdbc.update(
+                "UPDATE role_task_mapping SET role_id = :roleId, task_id = :taskId, status = :status WHERE mapping_id = :id",
+                new MapSqlParameterSource()
+                        .addValue("roleId",  roleId)
+                        .addValue("taskId",  taskId)
+                        .addValue("status",  status.name())
+                        .addValue("id",      mappingId));
     }
 
     public Optional<RoleTask> findRoleTaskMappingById(int mappingId) {
