@@ -11,6 +11,7 @@ import com.medplus.marketing_automation_backend.domain.ApprovalLog;
 import com.medplus.marketing_automation_backend.enums.ApprovalAction;
 import com.medplus.marketing_automation_backend.domain.AssetInfo;
 import com.medplus.marketing_automation_backend.repository.ApprovalLogRepository;
+import com.medplus.marketing_automation_backend.repository.CampaignRepository;
 import com.medplus.marketing_automation_backend.repository.UserRepository;
 import com.medplus.marketing_automation_backend.repository.WorkTaskRepository;
 import com.medplus.marketing_automation_backend.repository.WorkerCommentRepository;
@@ -34,19 +35,22 @@ public class WorkTaskService {
     private final AutoCreatedTaskService  autoCreatedTaskService;
     private final UserRepository          userRepo;
     private final CollaborationService    collaborationService;
+    private final CampaignRepository      campaignRepo;
 
     public WorkTaskService(WorkTaskRepository workTaskRepo,
                            WorkerCommentRepository workerCommentRepo,
                            ApprovalLogRepository approvalLogRepo,
                            AutoCreatedTaskService autoCreatedTaskService,
                            UserRepository userRepo,
-                           CollaborationService collaborationService) {
+                           CollaborationService collaborationService,
+                           CampaignRepository campaignRepo) {
         this.workTaskRepo          = workTaskRepo;
         this.workerCommentRepo     = workerCommentRepo;
         this.approvalLogRepo       = approvalLogRepo;
         this.autoCreatedTaskService = autoCreatedTaskService;
         this.userRepo              = userRepo;
         this.collaborationService  = collaborationService;
+        this.campaignRepo          = campaignRepo;
     }
 
     // -------------------------------------------------------------------------
@@ -117,7 +121,7 @@ public class WorkTaskService {
     }
 
     /**
-     * Marks a task complete: sets status → QC_REVIEW, logs time spent, and
+     * Marks a task complete: sets status → MANAGER_QC_REVIEW, logs time spent, and
      * stores any submission notes / asset URL provided by the creator.
      * Task must be IN_PROGRESS.
      */
@@ -164,7 +168,7 @@ public class WorkTaskService {
             if (updated == 0) {
                 throw new BadRequestException("Unable to complete task — please refresh and try again.");
             }
-            // Rule 5: task is now QC_REVIEW — deactivate collaboration
+            // Rule 5: task is now MANAGER_QC_REVIEW — deactivate collaboration
             workTaskRepo.deactivateCollaboration(taskId);
             // Close any linked auto-generated content task — the designer has
             // finished and no further content support is needed.
@@ -298,6 +302,32 @@ public class WorkTaskService {
     /** Full analytics snapshot for the Reports dashboard. */
     public java.util.Map<String, Object> analyticsSummary() {
         return workTaskRepo.analyticsSummary();
+    }
+
+    // -------------------------------------------------------------------------
+    // Per-task reference files (uploaded by the campaign requestor)
+    // -------------------------------------------------------------------------
+
+    /**
+     * Saves one or more reference files against a specific work task.
+     * The caller must be the campaign requestor (verified before calling this method).
+     */
+    public void addTaskFiles(String taskId, int campaignId,
+                              List<String> fileUrls, List<String> fileOriginalNames) {
+        for (int i = 0; i < fileUrls.size(); i++) {
+            String url  = fileUrls.get(i);
+            String name = (fileOriginalNames != null && i < fileOriginalNames.size())
+                    ? fileOriginalNames.get(i) : null;
+            campaignRepo.insertTaskFile(campaignId, taskId, url, name);
+        }
+    }
+
+    /**
+     * Removes a single reference file from a specific work task.
+     * The caller must be the campaign requestor (verified before calling this method).
+     */
+    public void removeTaskFile(String taskId, String fileUrl) {
+        campaignRepo.deleteTaskFile(taskId, fileUrl);
     }
 
     // -------------------------------------------------------------------------

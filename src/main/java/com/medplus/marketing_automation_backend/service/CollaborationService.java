@@ -251,7 +251,8 @@ public class CollaborationService {
         }
         // Rule 6: block collaborate when task cannot be worked on
         if (task.getStatus() == com.medplus.marketing_automation_backend.enums.TaskStatus.HELD
-                || task.getStatus() == com.medplus.marketing_automation_backend.enums.TaskStatus.QC_REVIEW
+                || task.getStatus() == com.medplus.marketing_automation_backend.enums.TaskStatus.MANAGER_QC_REVIEW
+                || task.getStatus() == com.medplus.marketing_automation_backend.enums.TaskStatus.REQUESTOR_QC_REVIEW
                 || task.getStatus() == com.medplus.marketing_automation_backend.enums.TaskStatus.COMPLETED) {
             throw new BadRequestException(
                     "Collaboration cannot be started when the task is " + task.getStatus() + ".");

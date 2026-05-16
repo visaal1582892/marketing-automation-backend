@@ -60,6 +60,8 @@ public class FlywaySchemaRepairRunner implements CommandLineRunner {
         purgeOrphanedFlywayEntries();
         ensureAutoCreatedTasksTable();
         ensureQcRoutingTable();
+        ensureAutoContentGranularTask();
+        ensureCampaignFilesWorkTaskIdColumn();
     }
 
     private void repairFullWipe() {
@@ -167,6 +169,17 @@ public class FlywaySchemaRepairRunner implements CommandLineRunner {
                 jdbc.execute("ALTER TABLE campaigns ADD COLUMN updated_at TIMESTAMP NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP");
                 log.info("FlywaySchemaRepairRunner: added updated_at to campaigns.");
             }
+            // Extend campaigns status ENUM with new QC stage values
+            jdbc.execute("ALTER TABLE campaigns MODIFY COLUMN status "
+                    + "ENUM('IN_PROGRESS','QC_REVIEW','MANAGER_QC_REVIEW','REQUESTOR_QC_REVIEW',"
+                    + "'COMPLETED','REJECTED','CANCELLED') NOT NULL DEFAULT 'IN_PROGRESS'");
+            log.info("FlywaySchemaRepairRunner: campaigns status ENUM extended to include MANAGER_QC_REVIEW and REQUESTOR_QC_REVIEW.");
+            // Migrate existing QC_REVIEW campaigns to MANAGER_QC_REVIEW
+            int migratedCamp = jdbc.update(
+                    "UPDATE campaigns SET status = 'MANAGER_QC_REVIEW' WHERE status = 'QC_REVIEW'");
+            if (migratedCamp > 0) {
+                log.info("FlywaySchemaRepairRunner: migrated {} campaigns rows from QC_REVIEW to MANAGER_QC_REVIEW.", migratedCamp);
+            }
         } catch (Exception e) {
             log.error("FlywaySchemaRepairRunner: ensureCampaignColumns failed — {}", e.getMessage());
         }
@@ -186,11 +199,30 @@ public class FlywaySchemaRepairRunner implements CommandLineRunner {
                 jdbc.execute("ALTER TABLE work_tasks ADD COLUMN updated_at TIMESTAMP NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP");
                 log.info("FlywaySchemaRepairRunner: added updated_at to work_tasks.");
             }
-            // Extend the status ENUM to include REJECTED (idempotent — MySQL ignores if already present)
+            // Extend the status ENUM to include new statuses (idempotent — MySQL ignores if already present)
             jdbc.execute("ALTER TABLE work_tasks MODIFY COLUMN status "
-                    + "ENUM('ASSIGNED','ACCEPTED','IN_PROGRESS','QC_REVIEW','REWORK',"
-                    + "'COMPLETED','HELD','CANCELLED','REJECTED') NOT NULL DEFAULT 'ASSIGNED'");
-            log.info("FlywaySchemaRepairRunner: work_tasks status ENUM extended to include REJECTED.");
+                    + "ENUM('ASSIGNED','ACCEPTED','IN_PROGRESS','QC_REVIEW','MANAGER_QC_REVIEW','REWORK',"
+                    + "'REQUESTOR_QC_REVIEW','COMPLETED','HELD','CANCELLED','REJECTED') NOT NULL DEFAULT 'ASSIGNED'");
+            log.info("FlywaySchemaRepairRunner: work_tasks status ENUM extended to include MANAGER_QC_REVIEW and REQUESTOR_QC_REVIEW.");
+
+            // Migrate existing QC_REVIEW rows to MANAGER_QC_REVIEW
+            int migratedQc = jdbc.update(
+                    "UPDATE work_tasks SET status = 'MANAGER_QC_REVIEW' WHERE status = 'QC_REVIEW'");
+            if (migratedQc > 0) {
+                log.info("FlywaySchemaRepairRunner: migrated {} work_tasks rows from QC_REVIEW to MANAGER_QC_REVIEW.", migratedQc);
+            }
+
+            // Rename completed_at → manager_approved_at
+            if (columnExists("work_tasks", "completed_at") && !columnExists("work_tasks", "manager_approved_at")) {
+                jdbc.execute("ALTER TABLE work_tasks CHANGE COLUMN completed_at manager_approved_at DATETIME NULL DEFAULT NULL");
+                log.info("FlywaySchemaRepairRunner: renamed work_tasks.completed_at to manager_approved_at.");
+            }
+
+            // Add requestor_approved_at
+            if (!columnExists("work_tasks", "requestor_approved_at")) {
+                jdbc.execute("ALTER TABLE work_tasks ADD COLUMN requestor_approved_at DATETIME NULL DEFAULT NULL AFTER manager_approved_at");
+                log.info("FlywaySchemaRepairRunner: added requestor_approved_at to work_tasks.");
+            }
         } catch (Exception e) {
             log.error("FlywaySchemaRepairRunner: ensureWorkTaskColumns failed — {}", e.getMessage());
         }
@@ -346,6 +378,74 @@ public class FlywaySchemaRepairRunner implements CommandLineRunner {
             }
         } catch (Exception e) {
             log.error("FlywaySchemaRepairRunner: ensureQcRoutingTable failed — {}", e.getMessage());
+        }
+    }
+
+    /**
+     * Ensures the granular_tasks row and role mappings for the "Need Content?"
+     * feature exist on every startup, for both fresh and existing databases.
+     *
+     * <ul>
+     *   <li>Removes any stale row keyed with underscores ("TASK_AUTO_CONTENT").</li>
+     *   <li>Inserts the correct "TASK-AUTO-CONTENT" row (task_type_id '4' = Content Writing).</li>
+     *   <li>Maps the task to Content Writer (role '4') and CRM Specialist (role '5')
+     *       so the routing engine can assign it automatically.</li>
+     * </ul>
+     *
+     * AutoCreatedTaskService uses the hardcoded constant "TASK-AUTO-CONTENT" (hyphens);
+     * the granular_tasks row must carry the exact same key to satisfy fk_wt_gran_task.
+     */
+    private void ensureAutoContentGranularTask() {
+        try {
+            // Remove any incorrectly keyed row inserted manually with underscores
+            Integer wrongRow = jdbc.queryForObject(
+                    "SELECT COUNT(*) FROM granular_tasks WHERE task_id = 'TASK_AUTO_CONTENT'",
+                    Integer.class);
+            if (wrongRow != null && wrongRow > 0) {
+                jdbc.update("DELETE FROM granular_tasks WHERE task_id = 'TASK_AUTO_CONTENT'");
+                log.info("FlywaySchemaRepairRunner: removed incorrectly keyed TASK_AUTO_CONTENT row.");
+            }
+
+            // Ensure the correctly keyed granular task row exists
+            Integer correct = jdbc.queryForObject(
+                    "SELECT COUNT(*) FROM granular_tasks WHERE task_id = 'TASK-AUTO-CONTENT'",
+                    Integer.class);
+            if (correct == null || correct == 0) {
+                jdbc.update(
+                        "INSERT IGNORE INTO granular_tasks "
+                        + "(task_id, task_name, task_type_id, task_category, status) "
+                        + "VALUES ('TASK-AUTO-CONTENT', 'Auto Generated Content Writing', '4', 'OFFLINE', 'ACTIVE')");
+                log.info("FlywaySchemaRepairRunner: inserted TASK-AUTO-CONTENT into granular_tasks.");
+            }
+
+            // Map to Content Writer (role '4') and CRM Specialist (role '5')
+            // INSERT IGNORE is safe — unique key uq_role_task prevents duplicates
+            jdbc.update("INSERT IGNORE INTO role_task_mapping (role_id, task_id) VALUES ('4', 'TASK-AUTO-CONTENT')");
+            jdbc.update("INSERT IGNORE INTO role_task_mapping (role_id, task_id) VALUES ('5', 'TASK-AUTO-CONTENT')");
+            log.info("FlywaySchemaRepairRunner: ensured role_task_mapping for TASK-AUTO-CONTENT (roles 4, 5).");
+
+        } catch (Exception e) {
+            log.error("FlywaySchemaRepairRunner: ensureAutoContentGranularTask failed — {}", e.getMessage());
+        }
+    }
+
+    /**
+     * Adds the nullable work_task_id column to campaign_files so files can be
+     * either campaign-level (NULL) or tied to a specific work task (VARCHAR(20) FK).
+     * Existing rows keep NULL automatically — no data migration needed.
+     */
+    private void ensureCampaignFilesWorkTaskIdColumn() {
+        try {
+            if (!columnExists("campaign_files", "work_task_id")) {
+                jdbc.execute(
+                    "ALTER TABLE campaign_files " +
+                    "ADD COLUMN work_task_id VARCHAR(20) NULL DEFAULT NULL AFTER campaign_id, " +
+                    "ADD CONSTRAINT fk_cf_work_task FOREIGN KEY (work_task_id) " +
+                    "  REFERENCES work_tasks(task_id) ON DELETE SET NULL");
+                log.info("FlywaySchemaRepairRunner: added work_task_id column to campaign_files.");
+            }
+        } catch (Exception e) {
+            log.error("FlywaySchemaRepairRunner: ensureCampaignFilesWorkTaskIdColumn failed — {}", e.getMessage());
         }
     }
 

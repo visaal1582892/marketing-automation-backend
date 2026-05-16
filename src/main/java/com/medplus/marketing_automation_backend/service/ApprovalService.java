@@ -52,8 +52,8 @@ public class ApprovalService {
         WorkTask task = workTaskRepo.findById(taskId)
                 .orElseThrow(() -> new ResourceNotFoundException("Task not found: " + taskId));
 
-        if (task.getStatus() != TaskStatus.QC_REVIEW) {
-            throw new BadRequestException("Task must be in QC_REVIEW to review. Current: " + task.getStatus());
+        if (task.getStatus() != TaskStatus.MANAGER_QC_REVIEW) {
+            throw new BadRequestException("Task must be in MANAGER_QC_REVIEW to review. Current: " + task.getStatus());
         }
         // Self-approval guard — a user who also holds a worker role cannot approve their own task.
         if (reviewer.getUserId() != null && task.getAssignedTo() != null
@@ -84,19 +84,23 @@ public class ApprovalService {
             case REQUESTOR_REWORK -> throw new BadRequestException(
                     "Use the requestor-rework endpoint to submit a requestor rework request.");
             case APPROVED -> {
-                workTaskRepo.markCompleted(taskId);
-                workTaskRepo.deactivateCollaboration(taskId); // Rule 5: COMPLETED → deactivate
+                // Manager approves → REQUESTOR_QC_REVIEW (requestor must still sign off)
+                workTaskRepo.markManagerApproved(taskId);
+                workTaskRepo.deactivateCollaboration(taskId);
                 if (task.getAssignedTo() != null) {
                     userRepo.decrementActiveTasks(task.getAssignedTo().longValue());
                 }
-                int remaining = workTaskRepo.countIncomplete(task.getCampaignId());
-                if (remaining == 0) {
-                    campaignRepo.updateStatus(task.getCampaignId(), CampaignStatus.COMPLETED);
-                    log.info("QC APPROVED — campaign completed | taskId={} campaignId={}",
+                // Check if all tasks are now in a terminal/requestor-qc state
+                int stillActive = workTaskRepo.countIncomplete(task.getCampaignId());
+                if (stillActive == 0) {
+                    // All tasks are COMPLETED / CANCELLED / REJECTED / REQUESTOR_QC_REVIEW
+                    // Move campaign to REQUESTOR_QC_REVIEW so requestor sees it in their queue
+                    campaignRepo.updateStatus(task.getCampaignId(), CampaignStatus.REQUESTOR_QC_REVIEW);
+                    log.info("MANAGER QC APPROVED — campaign moved to REQUESTOR_QC_REVIEW | taskId={} campaignId={}",
                             taskId, task.getCampaignId());
                 } else {
-                    log.info("QC APPROVED | taskId={} campaignId={} remainingTasks={}",
-                            taskId, task.getCampaignId(), remaining);
+                    log.info("MANAGER QC APPROVED | taskId={} campaignId={} remainingTasks={}",
+                            taskId, task.getCampaignId(), stillActive);
                 }
             }
             case NEEDS_REWORK -> {
@@ -145,6 +149,62 @@ public class ApprovalService {
                 userRepo.decrementActiveTasks(((Number) uid).longValue());
             }
         }
+    }
+
+    // -------------------------------------------------------------------------
+    // Requestor approves a REQUESTOR_QC_REVIEW task
+    // -------------------------------------------------------------------------
+
+    /**
+     * Allows the campaign requestor (or Admin) to approve a task that is in
+     * REQUESTOR_QC_REVIEW state. The task moves to COMPLETED and requestor_approved_at
+     * is stamped. If all tasks are now done, the campaign is marked COMPLETED.
+     */
+    @Transactional
+    public WorkTaskResponse requestorApproveTask(int campaignId, String taskId, String comment, User requestor) {
+        log.info("REQUESTOR approve | campaignId={} taskId={} requestorId={}", campaignId, taskId, requestor.getUserId());
+        Campaign campaign = campaignRepo.findById(campaignId)
+                .orElseThrow(() -> new ResourceNotFoundException("Campaign not found: " + campaignId));
+
+        boolean isAdmin = requestor.hasRole("Admin");
+        if (!isAdmin && !campaign.getRequestorId().equals(requestor.getUserId().intValue())) {
+            throw new BadRequestException("Only the campaign owner can approve a delivered task.");
+        }
+
+        WorkTask task = workTaskRepo.findById(taskId)
+                .orElseThrow(() -> new ResourceNotFoundException("Task not found: " + taskId));
+
+        if (task.getCampaignId() == null || task.getCampaignId().intValue() != campaignId) {
+            throw new BadRequestException("Task " + taskId + " does not belong to campaign " + campaignId);
+        }
+
+        if (task.getStatus() != TaskStatus.REQUESTOR_QC_REVIEW) {
+            throw new BadRequestException(
+                    "Only REQUESTOR_QC_REVIEW tasks can be approved by requestor. Current status: " + task.getStatus());
+        }
+
+        ApprovalLog entry = ApprovalLog.builder()
+                .taskId(taskId)
+                .reviewerId(requestor.getUserId().intValue())
+                .actionTaken(ApprovalAction.APPROVED)
+                .comments(comment)
+                .build();
+        approvalLogRepo.insert(entry);
+
+        workTaskRepo.markRequestorApproved(taskId);
+
+        int remainingPending = workTaskRepo.countPendingRequestorApproval(task.getCampaignId());
+        if (remainingPending == 0) {
+            campaignRepo.updateStatus(task.getCampaignId(), CampaignStatus.COMPLETED);
+            log.info("REQUESTOR approved last task — campaign completed | taskId={} campaignId={}",
+                    taskId, task.getCampaignId());
+        } else {
+            log.info("REQUESTOR approved | taskId={} campaignId={} remainingPending={}",
+                    taskId, task.getCampaignId(), remainingPending);
+        }
+
+        return CampaignService.toWorkTaskResponse(
+                workTaskRepo.findById(taskId).orElseThrow());
     }
 
     // -------------------------------------------------------------------------
@@ -204,9 +264,9 @@ public class ApprovalService {
             throw new BadRequestException("Task " + taskId + " does not belong to campaign " + campaignId);
         }
 
-        if (task.getStatus() != TaskStatus.COMPLETED) {
+        if (task.getStatus() != TaskStatus.REQUESTOR_QC_REVIEW && task.getStatus() != TaskStatus.COMPLETED) {
             throw new BadRequestException(
-                    "Only COMPLETED tasks can be sent for requestor rework. Current status: " + task.getStatus());
+                    "Only tasks in REQUESTOR_QC_REVIEW or COMPLETED status can be sent for requestor rework. Current status: " + task.getStatus());
         }
 
         ApprovalLog entry = ApprovalLog.builder()
@@ -218,15 +278,16 @@ public class ApprovalService {
         approvalLogRepo.insert(entry);
 
         workTaskRepo.markRework(taskId);
-        workTaskRepo.activateCollaboration(taskId); // Requestor rework → task active again → re-activate
+        workTaskRepo.activateCollaboration(taskId);
 
-        // Re-increment the assignee's active-task counter (markCompleted had decremented it).
+        // Re-increment the assignee's active-task counter (was decremented when manager approved).
         if (task.getAssignedTo() != null) {
             userRepo.incrementActiveTasks(task.getAssignedTo().longValue());
         }
 
-        // Re-open the campaign if it had been fully completed.
-        if (campaign.getStatus() == CampaignStatus.COMPLETED) {
+        // Re-open the campaign if it was in REQUESTOR_QC_REVIEW or already COMPLETED.
+        if (campaign.getStatus() == CampaignStatus.REQUESTOR_QC_REVIEW
+                || campaign.getStatus() == CampaignStatus.COMPLETED) {
             campaignRepo.updateStatus(campaignId, CampaignStatus.IN_PROGRESS);
             log.info("REQUESTOR rework — campaign re-opened | campaignId={}", campaignId);
         }

@@ -237,8 +237,8 @@ public class AutoCreatedTaskService {
                 // Content writer never started — cancel it
                 workTaskRepo.markCancelled(contentTaskId);
             } else {
-                // IN_PROGRESS or REWORK — writer did some work; mark complete
-                workTaskRepo.markCompleted(contentTaskId);
+                // IN_PROGRESS or REWORK — writer did some work; mark complete (skip both QC stages)
+                workTaskRepo.markRequestorApproved(contentTaskId);
             }
 
             if (child.getAssignedTo() != null) {

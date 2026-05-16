@@ -79,7 +79,7 @@ public class CollaboratorRepository {
                        wt.is_collaboration_started,
                        wt.is_collaboration_active,
                        wt.assigned_at, wt.accepted_at, wt.started_at,
-                       wt.submitted_at, wt.completed_at,
+                       wt.submitted_at, wt.manager_approved_at, wt.requestor_approved_at,
                        wt.total_time_logged_minutes, wt.dynamic_deadline,
                        wt.submission_notes,
                        wt.created_at, wt.updated_at,
@@ -135,7 +135,7 @@ public class CollaboratorRepository {
                        wt.is_collaboration_started,
                        wt.is_collaboration_active,
                        wt.assigned_at, wt.accepted_at, wt.started_at,
-                       wt.submitted_at, wt.completed_at,
+                       wt.submitted_at, wt.manager_approved_at, wt.requestor_approved_at,
                        wt.total_time_logged_minutes, wt.dynamic_deadline,
                        wt.submission_notes,
                        wt.created_at, wt.updated_at,
@@ -241,7 +241,7 @@ public class CollaboratorRepository {
                        wt.granular_task_id, wt.status,
                        wt.is_collaboration_started, wt.is_collaboration_active,
                        wt.assigned_at, wt.accepted_at, wt.started_at,
-                       wt.submitted_at, wt.completed_at,
+                       wt.submitted_at, wt.manager_approved_at, wt.requestor_approved_at,
                        wt.total_time_logged_minutes, wt.dynamic_deadline,
                        wt.submission_notes, wt.created_at, wt.updated_at,
                        u.full_name    AS assignee_name,
@@ -281,7 +281,7 @@ public class CollaboratorRepository {
                        wt.is_collaboration_started,
                        wt.is_collaboration_active,
                        wt.assigned_at, wt.accepted_at, wt.started_at,
-                       wt.submitted_at, wt.completed_at,
+                       wt.submitted_at, wt.manager_approved_at, wt.requestor_approved_at,
                        wt.total_time_logged_minutes, wt.dynamic_deadline,
                        wt.submission_notes,
                        wt.created_at, wt.updated_at,
@@ -394,7 +394,7 @@ public class CollaboratorRepository {
                        wt.is_collaboration_started,
                        wt.is_collaboration_active,
                        wt.assigned_at, wt.accepted_at, wt.started_at,
-                       wt.submitted_at, wt.completed_at,
+                       wt.submitted_at, wt.manager_approved_at, wt.requestor_approved_at,
                        wt.total_time_logged_minutes, wt.dynamic_deadline,
                        wt.submission_notes,
                        wt.created_at, wt.updated_at,
@@ -448,7 +448,7 @@ public class CollaboratorRepository {
                        wt.is_collaboration_started,
                        wt.is_collaboration_active,
                        wt.assigned_at, wt.accepted_at, wt.started_at,
-                       wt.submitted_at, wt.completed_at,
+                       wt.submitted_at, wt.manager_approved_at, wt.requestor_approved_at,
                        wt.total_time_logged_minutes, wt.dynamic_deadline,
                        wt.submission_notes,
                        wt.created_at, wt.updated_at,
@@ -508,7 +508,8 @@ public class CollaboratorRepository {
                 .acceptedAt(toLocalDateTime(rs, "accepted_at"))
                 .startedAt(toLocalDateTime(rs, "started_at"))
                 .submittedAt(toLocalDateTime(rs, "submitted_at"))
-                .completedAt(toLocalDateTime(rs, "completed_at"))
+                .managerApprovedAt(toLocalDateTime(rs, "manager_approved_at"))
+                .requestorApprovedAt(toLocalDateTime(rs, "requestor_approved_at"))
                 .totalTimeLoggedMinutes(getNullableInt(rs, "total_time_logged_minutes"))
                 .dynamicDeadline(toLocalDateTime(rs, "dynamic_deadline"))
                 .submissionNotes(rs.getString("submission_notes"))

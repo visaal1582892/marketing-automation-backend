@@ -74,15 +74,23 @@ public class RoutingEngineService {
      */
     @Transactional
     public void route(int campaignId) {
-        route(campaignId, Collections.emptyMap());
+        route(campaignId, Collections.emptyMap(), false);
+    }
+
+    public void route(int campaignId,
+                      Map<String, List<WorkTaskAnswerRequest.AnswerItem>> questionnaireByGranularTaskId) {
+        route(campaignId, questionnaireByGranularTaskId, false);
     }
 
     /**
      * @param questionnaireByGranularTaskId answers from the request form, keyed by {@code granular_task_id}
+     * @param autoAssign when true, each task (except TASK-OTHER) is immediately assigned to the best
+     *                   available user in its role; falls back to HELD if no user is available.
      */
     @Transactional
     public void route(int campaignId,
-                      Map<String, List<WorkTaskAnswerRequest.AnswerItem>> questionnaireByGranularTaskId) {
+                      Map<String, List<WorkTaskAnswerRequest.AnswerItem>> questionnaireByGranularTaskId,
+                      boolean autoAssign) {
         log.info("ROUTING start | campaignId={}", campaignId);
 
         Campaign campaign = campaignRepo.findById(campaignId)
@@ -114,7 +122,7 @@ public class RoutingEngineService {
                                 + (t.granularTaskId == null ? "(no task id)" : t.granularTaskId),
                         capacityReport(campaignId));
             }
-            boolean ok = assignTask(campaignId, requestorId, t.granularTaskId, t.roleId, qa);
+            boolean ok = assignTask(campaignId, requestorId, t.granularTaskId, t.roleId, qa, autoAssign);
             if (!ok) {
                 log.error("ROUTING failed — no active users | campaignId={} roleId={} granularTaskId={}",
                         campaignId, t.roleId, t.granularTaskId);
@@ -130,11 +138,11 @@ public class RoutingEngineService {
     }
 
     /**
-     * Collects the deliverables that still need a work_task. HELD and
-     * CANCELLED tasks are treated as "not routed" — their slot is gone, so
-     * the campaign needs a fresh assignment to fill it. Falls back to the
-     * legacy role/task mapping when a campaign has no deliverables (older
-     * test data).
+     * Collects the deliverables that still need a work_task. Only CANCELLED
+     * tasks are treated as "no longer routed" — all other statuses (including
+     * HELD, which is now the initial state for every new task) mean a work
+     * task already exists for that deliverable slot. Falls back to the legacy
+     * role/task mapping when a campaign has no deliverables (older test data).
      */
     private List<RoutingTarget> collectRoutingTargets(Campaign campaign) {
         int campaignId = campaign.getCampaignId();
@@ -143,8 +151,10 @@ public class RoutingEngineService {
         List<CampaignDeliverable> specs    = campaignRepo.findDeliverablesByCampaignId(campaignId);
         List<WorkTask>            existing = workTaskRepo.findByCampaignId(campaignId);
 
+        // HELD tasks ARE counted as "already routed" — they are the initial state
+        // for every newly created task; only CANCELLED slots need re-filling.
         java.util.Set<String> liveRoutedKeys = existing.stream()
-                .filter(t -> t.getStatus() != TaskStatus.CANCELLED && t.getStatus() != TaskStatus.HELD)
+                .filter(t -> t.getStatus() != TaskStatus.CANCELLED)
                 .map(WorkTask::getGranularTaskId)
                 .filter(java.util.Objects::nonNull)
                 .collect(Collectors.toSet());
@@ -334,56 +344,43 @@ public class RoutingEngineService {
      * @param requestorId user to exclude from the routing pool (self-assignment prevention);
      *                    pass {@code -1} to exclude nobody
      */
+    /**
+     * All tasks start in HELD state so the marketing manager can review and
+     * route each one before it lands in any worker's queue. No assignee is set
+     * at creation — the manager uses the Held Tasks page to auto-route
+     * (best available user) or hand-pick a specific worker.
+     */
     private boolean assignTask(int campaignId, int requestorId, String granularTaskId, String roleId,
-                                Map<String, List<WorkTaskAnswerRequest.AnswerItem>> questionnaireByGranularTaskId) {
+                                Map<String, List<WorkTaskAnswerRequest.AnswerItem>> questionnaireByGranularTaskId,
+                                boolean autoAssign) {
 
-        // "Other" tasks always start HELD so the Marketing Manager can
-        // manually choose the right assignee — do NOT assign to anyone yet.
-        boolean isOtherTask = "TASK-OTHER".equals(granularTaskId);
-
-        if (isOtherTask) {
-            WorkTask workTask = WorkTask.builder()
-                    .campaignId(campaignId)
-                    .granularTaskId(granularTaskId)
-                    .status(TaskStatus.HELD)
-                    // assignedTo intentionally omitted — stays NULL until manager routes it
-                    .build();
-            String workTaskId = workTaskRepo.insert(workTask);
-            log.info("ROUTING assignTask (HELD/unassigned) | campaignId={} granularTaskId={}",
-                    campaignId, granularTaskId);
-            if (granularTaskId != null) {
-                List<WorkTaskAnswerRequest.AnswerItem> pre = questionnaireByGranularTaskId.get(granularTaskId);
-                questionnaireService.savePrefilledAnswers(workTaskId, granularTaskId, pre);
-            }
-            return true;
+        // Auto-assign: find best available user for non-OTHER tasks when requested.
+        // Falls back to HELD if no user is available.
+        boolean shouldAutoAssign = autoAssign && !"TASK-OTHER".equals(granularTaskId);
+        User autoAssignee = null;
+        if (shouldAutoAssign) {
+            autoAssignee = userRepo.findBestAvailableUserInRole(roleId, requestorId).orElse(null);
         }
-
-        // Regular tasks: pick the best available user in the required role,
-        // excluding the requestor (they cannot be assigned their own campaign's tasks).
-        Optional<User> bestUser = userRepo.findBestAvailableUserInRole(roleId, requestorId);
-        if (bestUser.isEmpty()) {
-            log.warn("ROUTING assignTask — no user found | campaignId={} granularTaskId={} roleId={}",
-                    campaignId, granularTaskId, roleId);
-            return false;
-        }
-
-        User user = bestUser.get();
 
         WorkTask workTask = WorkTask.builder()
                 .campaignId(campaignId)
-                .assignedTo(user.getUserId().intValue())
                 .granularTaskId(granularTaskId)
-                .status(TaskStatus.ASSIGNED)
+                .status(autoAssignee != null ? TaskStatus.ASSIGNED : TaskStatus.HELD)
+                .assignedTo(autoAssignee != null ? autoAssignee.getUserId().intValue() : null)
                 .build();
 
         String workTaskId = workTaskRepo.insert(workTask);
-        userRepo.incrementActiveTasks(user.getUserId());
+        if (autoAssignee != null) {
+            userRepo.incrementActiveTasks(autoAssignee.getUserId());
+            log.info("ROUTING assignTask (AUTO-ASSIGNED) | campaignId={} granularTaskId={} assigneeId={}",
+                    campaignId, granularTaskId, autoAssignee.getUserId());
+        } else {
+            log.info("ROUTING assignTask (HELD) | campaignId={} granularTaskId={}",
+                    campaignId, granularTaskId);
+        }
 
-        log.info("ROUTING assignTask | campaignId={} granularTaskId={} assigneeId={} assigneeName={} status=ASSIGNED",
-                campaignId, granularTaskId, user.getUserId(), user.getFullName());
-
-        // Auto-add the campaign requestor as a collaborator so they can chat
-        // with the worker from day one without an explicit invite
+        // Pre-add the campaign requestor as a collaborator so they can see the
+        // task chat once a worker is assigned.
         if (requestorId > 0) {
             collaboratorRepo.addSingleCollaborator(workTaskId, requestorId);
         }

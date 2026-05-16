@@ -5,6 +5,7 @@ import com.medplus.marketing_automation_backend.dto.CampaignResponse;
 import com.medplus.marketing_automation_backend.dto.CampaignUpdateRequest;
 import com.medplus.marketing_automation_backend.dto.PagedResponse;
 import com.medplus.marketing_automation_backend.dto.RequestorCampaignUpdateRequest;
+import com.medplus.marketing_automation_backend.dto.FollowupTaskRequest;
 import com.medplus.marketing_automation_backend.dto.TaskSpecRequest;
 import com.medplus.marketing_automation_backend.dto.WorkTaskResponse;
 import com.medplus.marketing_automation_backend.enums.Priority;
@@ -61,6 +62,26 @@ public class CampaignController {
         LocalDate from = dateFrom != null && !dateFrom.isBlank() ? LocalDate.parse(dateFrom) : null;
         LocalDate to   = dateTo   != null && !dateTo.isBlank()   ? LocalDate.parse(dateTo)   : null;
         return campaignService.listMyPaged(requestorId, campaignId, status, priority, taskType, from, to, page, size);
+    }
+
+    /**
+     * Paged REQUESTOR_QC_REVIEW tasks for the caller's own campaigns.
+     * Admins see all. Supports search, date-range, and pagination.
+     */
+    @GetMapping("/requestor-qc-tasks")
+    @PreAuthorize("hasAnyRole('ADMIN','REQUESTOR','MARKETING_MANAGER','HEAD','REGIONAL_MANAGER')")
+    public PagedResponse<WorkTaskResponse> requestorQcTasks(
+            @AuthenticationPrincipal CustomUserDetails principal,
+            @RequestParam(required = false) String search,
+            @RequestParam(required = false) String dateFrom,
+            @RequestParam(required = false) String dateTo,
+            @RequestParam(defaultValue = "0")  int page,
+            @RequestParam(defaultValue = "20") int size) {
+        int requestorId = principal.getUser().getUserId().intValue();
+        boolean isAdmin = principal.getUser().hasRole("Admin");
+        LocalDate from = dateFrom != null ? LocalDate.parse(dateFrom) : null;
+        LocalDate to   = dateTo   != null ? LocalDate.parse(dateTo)   : null;
+        return campaignService.listRequestorQcTasks(requestorId, isAdmin, search, from, to, page, size);
     }
 
     /**
@@ -143,6 +164,14 @@ public class CampaignController {
         return campaignService.addTasksToCampaign(id, specs, principal.getUser().getUserId().intValue());
     }
 
+    @PostMapping("/{id}/followup-tasks")
+    @PreAuthorize("hasAnyRole('ADMIN','REQUESTOR')")
+    public CampaignResponse addFollowupTasks(@PathVariable int id,
+                                              @RequestBody FollowupTaskRequest req,
+                                              @AuthenticationPrincipal CustomUserDetails principal) {
+        return campaignService.addFollowupTasks(id, req, principal.getUser().getUserId().intValue());
+    }
+
     /**
      * Requestor (owner) edits the form fields of their own campaign and
      * optionally adds new task deliverables or campaign-level files.
@@ -220,14 +249,14 @@ public class CampaignController {
     }
 
     // -------------------------------------------------------------------------
-    // Requestor rework — send a COMPLETED task back for another rework cycle
+    // Requestor rework — send a REQUESTOR_QC_REVIEW task back for rework
     // -------------------------------------------------------------------------
 
     /**
-     * Allows the campaign requestor (or Admin) to send a COMPLETED task back
-     * for rework after delivery, if they are not satisfied with the output.
-     * The task is flipped COMPLETED → REWORK and the parent campaign is
-     * re-opened if it had been fully completed.
+     * Allows the campaign requestor (or Admin) to send a task in REQUESTOR_QC_REVIEW
+     * back for rework, if they are not satisfied with the output.
+     * The task is flipped REQUESTOR_QC_REVIEW → REWORK and the parent campaign is
+     * re-opened.
      *
      * <p>Body: { "message": "Please revise the colour scheme." }
      */
@@ -239,5 +268,26 @@ public class CampaignController {
                                              @AuthenticationPrincipal CustomUserDetails principal) {
         String message = body != null ? body.get("message") : null;
         return approvalService.requestorReworkTask(campaignId, taskId, message, principal.getUser());
+    }
+
+    // -------------------------------------------------------------------------
+    // Requestor approval — sign off on a REQUESTOR_QC_REVIEW task
+    // -------------------------------------------------------------------------
+
+    /**
+     * Allows the campaign requestor (or Admin) to approve a task in REQUESTOR_QC_REVIEW.
+     * The task moves to COMPLETED and requestor_approved_at is stamped.
+     * If all tasks are done, the campaign is marked COMPLETED.
+     *
+     * <p>Body: { "comment": "Looks great!" } (optional)
+     */
+    @PostMapping("/{campaignId}/tasks/{taskId}/requestor-approve")
+    @PreAuthorize("hasAnyRole('ADMIN','REQUESTOR','MARKETING_MANAGER','HEAD','REGIONAL_MANAGER')")
+    public WorkTaskResponse requestorApprove(@PathVariable int campaignId,
+                                              @PathVariable String taskId,
+                                              @RequestBody(required = false) Map<String, String> body,
+                                              @AuthenticationPrincipal CustomUserDetails principal) {
+        String comment = body != null ? body.get("comment") : null;
+        return approvalService.requestorApproveTask(campaignId, taskId, comment, principal.getUser());
     }
 }

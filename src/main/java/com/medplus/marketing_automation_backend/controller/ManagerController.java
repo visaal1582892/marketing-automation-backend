@@ -171,11 +171,13 @@ public class ManagerController {
      */
     @PostMapping("/tasks/{taskId}/assign")
     public WorkTaskResponse assignHeldTask(@PathVariable String taskId,
-                                           @RequestBody java.util.Map<String, Object> body) {
+                                           @RequestBody java.util.Map<String, Object> body,
+                                           @AuthenticationPrincipal CustomUserDetails actor) {
         Object uidRaw = body == null ? null : body.get("userId");
         if (uidRaw == null) throw new IllegalArgumentException("userId is required");
         int userId = uidRaw instanceof Number n ? n.intValue() : Integer.parseInt(uidRaw.toString());
-        return campaignService.assignHeldTaskToUser(taskId, userId);
+        int actorId = actor.getUser().getUserId().intValue();
+        return campaignService.assignHeldTaskToUser(taskId, userId, actorId);
     }
 
     // -------------------------------------------------------------------------

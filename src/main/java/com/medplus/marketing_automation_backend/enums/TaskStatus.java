@@ -4,8 +4,9 @@ public enum TaskStatus {
     ASSIGNED("Assigned"),
     ACCEPTED("Accepted"),
     IN_PROGRESS("In Progress"),
-    QC_REVIEW("QC Review"),
+    MANAGER_QC_REVIEW("Manager QC Review"),
     REWORK("Rework"),
+    REQUESTOR_QC_REVIEW("Requestor QC Review"),
     COMPLETED("Completed"),
     /**
      * Task was explicitly rejected by a QC reviewer. Unlike CANCELLED (which
@@ -47,6 +48,7 @@ public enum TaskStatus {
     public boolean consumesCapacity() {
         return this == ASSIGNED || this == ACCEPTED
             || this == IN_PROGRESS || this == REWORK
-            || this == QC_REVIEW;
+            || this == MANAGER_QC_REVIEW;
+        // REQUESTOR_QC_REVIEW does NOT consume capacity — worker is done.
     }
 }

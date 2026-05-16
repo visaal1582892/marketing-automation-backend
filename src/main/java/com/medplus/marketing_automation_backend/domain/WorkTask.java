@@ -27,16 +27,18 @@ public class WorkTask {
     private TaskStatus status;
 
     // Lifecycle timestamps (Module 3 — auditing & efficiency reports)
-    //   assignedAt  : task was created and assigned to this user
-    //   acceptedAt  : creator clicked "Accept" — timer starts here
-    //   startedAt   : alias of acceptedAt (kept for backward compat)
-    //   submittedAt : creator clicked "Submit for QC"
-    //   completedAt : QC manager approved and marked the task COMPLETED
+    //   assignedAt         : task was created and assigned to this user
+    //   acceptedAt         : creator clicked "Accept" — timer starts here
+    //   startedAt          : alias of acceptedAt (kept for backward compat)
+    //   submittedAt        : creator clicked "Submit for QC"
+    //   managerApprovedAt  : QC manager approved → REQUESTOR_QC_REVIEW
+    //   requestorApprovedAt: Requestor approved → COMPLETED
     private LocalDateTime assignedAt;
     private LocalDateTime acceptedAt;
     private LocalDateTime startedAt;
     private LocalDateTime submittedAt;
-    private LocalDateTime completedAt;
+    private LocalDateTime managerApprovedAt;
+    private LocalDateTime requestorApprovedAt;
     private Integer       totalTimeLoggedMinutes;
     private LocalDateTime dynamicDeadline;
 
@@ -55,6 +57,12 @@ public class WorkTask {
     /** Latest comment from the requestor (REQUESTOR_REWORK) for this task. */
     private String        latestRequestorReworkComment;
 
+    /** Most recent rework comment across both manager and requestor (derived). */
+    private String        latestReworkComment;
+
+    /** Action type of the most recent rework: "NEEDS_REWORK" or "REQUESTOR_REWORK". */
+    private String        latestReworkSource;
+
     private LocalDateTime createdAt;
     private LocalDateTime updatedAt;
 
@@ -63,7 +71,7 @@ public class WorkTask {
 
     /**
      * True when the collaboration is currently open for chat and asset uploads.
-     * Set to false automatically when the task enters HELD, QC_REVIEW, or COMPLETED,
+     * Set to false automatically when the task enters HELD, MANAGER_QC_REVIEW, or COMPLETED,
      * and can also be toggled manually by the owner (Pause Chat).
      */
     private boolean collaborationActive;

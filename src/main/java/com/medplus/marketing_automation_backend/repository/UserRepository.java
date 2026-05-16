@@ -258,7 +258,7 @@ public class UserRepository {
                                   SELECT assigned_to, COUNT(*) AS active_count
                                     FROM work_tasks
                                    WHERE assigned_to IS NOT NULL
-                                     AND status IN ('ASSIGNED','IN_PROGRESS','REWORK','QC_REVIEW')
+                                     AND status IN ('ASSIGNED','IN_PROGRESS','REWORK','MANAGER_QC_REVIEW')
                                    GROUP BY assigned_to
                               ) wt ON wt.assigned_to = u.user_id
                          WHERE u.status = 'ACTIVE'
@@ -296,7 +296,7 @@ public class UserRepository {
                                   SELECT assigned_to, COUNT(*) AS active_count
                                     FROM work_tasks
                                    WHERE assigned_to IS NOT NULL
-                                     AND status IN ('ASSIGNED','IN_PROGRESS','REWORK','QC_REVIEW')
+                                     AND status IN ('ASSIGNED','IN_PROGRESS','REWORK','MANAGER_QC_REVIEW')
                                    GROUP BY assigned_to
                               ) wt ON wt.assigned_to = u.user_id
                          WHERE ur.role_id  = :roleId
@@ -380,7 +380,7 @@ public class UserRepository {
                            COUNT(*)    AS active_count
                       FROM work_tasks
                      WHERE assigned_to IS NOT NULL
-                       AND status IN ('ASSIGNED','IN_PROGRESS','REWORK','QC_REVIEW')
+                       AND status IN ('ASSIGNED','IN_PROGRESS','REWORK','MANAGER_QC_REVIEW')
                      GROUP BY assigned_to
                 ) wt ON wt.user_id = u.user_id
                    SET u.current_active_tasks = COALESCE(wt.active_count, 0)

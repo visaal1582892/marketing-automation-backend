@@ -1,8 +1,13 @@
 package com.medplus.marketing_automation_backend.controller;
 
 import com.medplus.marketing_automation_backend.domain.AssetInfo;
+import com.medplus.marketing_automation_backend.domain.WorkTask;
 import com.medplus.marketing_automation_backend.dto.TaskSubmissionRequest;
 import com.medplus.marketing_automation_backend.dto.WorkTaskResponse;
+import com.medplus.marketing_automation_backend.exception.BadRequestException;
+import com.medplus.marketing_automation_backend.exception.ResourceNotFoundException;
+import com.medplus.marketing_automation_backend.repository.CampaignRepository;
+import com.medplus.marketing_automation_backend.repository.WorkTaskRepository;
 import com.medplus.marketing_automation_backend.security.CustomUserDetails;
 import com.medplus.marketing_automation_backend.service.WorkTaskService;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
@@ -10,15 +15,22 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
+import java.util.Map;
 
 @RestController
 @RequestMapping("/api/tasks")
 public class WorkTaskController {
 
-    private final WorkTaskService workTaskService;
+    private final WorkTaskService    workTaskService;
+    private final WorkTaskRepository workTaskRepo;
+    private final CampaignRepository campaignRepo;
 
-    public WorkTaskController(WorkTaskService workTaskService) {
+    public WorkTaskController(WorkTaskService workTaskService,
+                               WorkTaskRepository workTaskRepo,
+                               CampaignRepository campaignRepo) {
         this.workTaskService = workTaskService;
+        this.workTaskRepo    = workTaskRepo;
+        this.campaignRepo    = campaignRepo;
     }
 
     /** List all tasks assigned to the currently authenticated user. */
@@ -107,6 +119,70 @@ public class WorkTaskController {
                                     @PathVariable int commentId,
                                     @AuthenticationPrincipal CustomUserDetails principal) {
         workTaskService.markCommentAnswered(id, commentId);
+    }
+
+    /**
+     * Requestor adds reference files to a specific work task.
+     * Body: { campaignId: int, fileUrls: string[], fileOriginalNames: string[] }
+     * Only the campaign requestor may call this endpoint.
+     */
+    @PostMapping("/{id}/files")
+    public ResponseEntity<Map<String, String>> addTaskFiles(
+            @PathVariable String id,
+            @RequestBody Map<String, Object> body,
+            @AuthenticationPrincipal CustomUserDetails principal) {
+
+        WorkTask task = workTaskRepo.findById(id)
+                .orElseThrow(() -> new ResourceNotFoundException("Task not found: " + id));
+
+        int campaignId = task.getCampaignId();
+        com.medplus.marketing_automation_backend.domain.Campaign campaign =
+                campaignRepo.findById(campaignId)
+                        .orElseThrow(() -> new ResourceNotFoundException("Campaign not found: " + campaignId));
+
+        int callerId = principal.getUser().getUserId().intValue();
+        if (campaign.getRequestorId() == null || campaign.getRequestorId() != callerId) {
+            throw new BadRequestException("Only the campaign requestor can add files to tasks.");
+        }
+
+        @SuppressWarnings("unchecked")
+        List<String> fileUrls = (List<String>) body.getOrDefault("fileUrls", List.of());
+        @SuppressWarnings("unchecked")
+        List<String> fileOriginalNames = (List<String>) body.getOrDefault("fileOriginalNames", List.of());
+
+        workTaskService.addTaskFiles(id, campaignId, fileUrls, fileOriginalNames);
+        return ResponseEntity.ok(Map.of("message", "Files added successfully."));
+    }
+
+    /**
+     * Requestor removes a reference file from a specific work task.
+     * Body: { fileUrl: string }
+     * Only the campaign requestor may call this endpoint.
+     */
+    @DeleteMapping("/{id}/files")
+    public ResponseEntity<Map<String, String>> removeTaskFile(
+            @PathVariable String id,
+            @RequestBody Map<String, String> body,
+            @AuthenticationPrincipal CustomUserDetails principal) {
+
+        WorkTask task = workTaskRepo.findById(id)
+                .orElseThrow(() -> new ResourceNotFoundException("Task not found: " + id));
+
+        com.medplus.marketing_automation_backend.domain.Campaign campaign =
+                campaignRepo.findById(task.getCampaignId())
+                        .orElseThrow(() -> new ResourceNotFoundException("Campaign not found: " + task.getCampaignId()));
+
+        int callerId = principal.getUser().getUserId().intValue();
+        if (campaign.getRequestorId() == null || campaign.getRequestorId() != callerId) {
+            throw new BadRequestException("Only the campaign requestor can remove files from tasks.");
+        }
+
+        String fileUrl = body.get("fileUrl");
+        if (fileUrl == null || fileUrl.isBlank()) {
+            throw new BadRequestException("fileUrl is required.");
+        }
+        workTaskService.removeTaskFile(id, fileUrl);
+        return ResponseEntity.ok(Map.of("message", "File removed successfully."));
     }
 
     /** Returns a flat list of asset URLs from the request body. */

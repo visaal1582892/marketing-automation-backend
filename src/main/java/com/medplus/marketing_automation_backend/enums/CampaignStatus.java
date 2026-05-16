@@ -2,7 +2,8 @@ package com.medplus.marketing_automation_backend.enums;
 
 public enum CampaignStatus {
     IN_PROGRESS("In Progress"),
-    QC_REVIEW("QC Review"),
+    MANAGER_QC_REVIEW("Manager QC Review"),
+    REQUESTOR_QC_REVIEW("Requestor QC Review"),
     COMPLETED("Completed"),
     REJECTED("Rejected"),
     CANCELLED("Cancelled");

@@ -52,7 +52,7 @@ public class CampaignRepository {
                    (SELECT COUNT(*) FROM work_tasks wt WHERE wt.campaign_id = c.campaign_id AND wt.status <> 'CANCELLED') AS task_count,
                    (SELECT COUNT(*) FROM work_tasks wt WHERE wt.campaign_id = c.campaign_id AND wt.status = 'COMPLETED')  AS completed_task_count,
                    (SELECT COUNT(*) > 0 FROM work_tasks wt WHERE wt.campaign_id = c.campaign_id AND wt.status = 'REWORK')    AS has_rework,
-                   (SELECT COUNT(*) > 0 FROM work_tasks wt WHERE wt.campaign_id = c.campaign_id AND wt.status = 'QC_REVIEW') AS has_qc_review
+                   (SELECT COUNT(*) > 0 FROM work_tasks wt WHERE wt.campaign_id = c.campaign_id AND wt.status IN ('MANAGER_QC_REVIEW','REQUESTOR_QC_REVIEW')) AS has_qc_review
             FROM campaigns c
             LEFT JOIN users               u   ON u.user_id   = c.requestor_id
             LEFT JOIN departments         d   ON d.department_id = c.department_id
@@ -118,7 +118,7 @@ public class CampaignRepository {
 
     public int updateStatus(int campaignId, CampaignStatus status) {
         return jdbc.update(
-                "UPDATE campaigns SET status = :status WHERE campaign_id = :id",
+                "UPDATE campaigns SET status = :status, updated_at = NOW() WHERE campaign_id = :id",
                 new MapSqlParameterSource("status", status.name()).addValue("id", campaignId));
     }
 
@@ -133,7 +133,8 @@ public class CampaignRepository {
                 UPDATE campaigns
                    SET priority               = :priority,
                        flagged_inconsistency  = :flagged,
-                       inconsistency_reason   = :reason
+                       inconsistency_reason   = :reason,
+                       updated_at             = NOW()
                  WHERE campaign_id = :id
                 """,
                 new MapSqlParameterSource("priority", newPriority.name())
@@ -154,7 +155,8 @@ public class CampaignRepository {
                        key_message           = COALESCE(:keyMessage, key_message),
                        budget_tier           = COALESCE(:budgetTier, budget_tier),
                        flagged_inconsistency = :flagged,
-                       inconsistency_reason  = :reason
+                       inconsistency_reason  = :reason,
+                       updated_at            = NOW()
                  WHERE campaign_id = :id
                 """,
                 new MapSqlParameterSource("priority",   priority == null ? null : priority.name())
@@ -173,7 +175,7 @@ public class CampaignRepository {
 
     public int updateStatusAndNotes(int campaignId, CampaignStatus status, String notes) {
         return jdbc.update(
-                "UPDATE campaigns SET status = :status, routing_notes = :notes WHERE campaign_id = :id",
+                "UPDATE campaigns SET status = :status, routing_notes = :notes, updated_at = NOW() WHERE campaign_id = :id",
                 new MapSqlParameterSource("status", status.name())
                         .addValue("notes", notes)
                         .addValue("id", campaignId));
@@ -253,7 +255,8 @@ public class CampaignRepository {
                        kpi_type              = :kpiType,
                        expected_output       = :expectedOutput,
                        flagged_inconsistency = :flagged,
-                       inconsistency_reason  = :reason
+                       inconsistency_reason  = :reason,
+                       updated_at            = NOW()
                  WHERE campaign_id = :id
                 """,
                 new MapSqlParameterSource()
@@ -340,10 +343,12 @@ public class CampaignRepository {
     // Campaign Files
     // -------------------------------------------------------------------------
 
+    // ── Campaign-level files (work_task_id IS NULL) ───────────────────────────
+
     public void insertCampaignFile(int campaignId, String fileUrl, String fileName) {
         jdbc.update("""
-                INSERT INTO campaign_files (campaign_id, file_url, file_name)
-                VALUES (:campaignId, :fileUrl, :fileName)
+                INSERT INTO campaign_files (campaign_id, work_task_id, file_url, file_name)
+                VALUES (:campaignId, NULL, :fileUrl, :fileName)
                 """,
                 new MapSqlParameterSource()
                         .addValue("campaignId", campaignId)
@@ -353,23 +358,65 @@ public class CampaignRepository {
 
     public List<String> findFileUrlsByCampaignId(int campaignId) {
         return jdbc.queryForList(
-                "SELECT file_url FROM campaign_files WHERE campaign_id = :id ORDER BY file_id",
+                "SELECT file_url FROM campaign_files WHERE campaign_id = :id AND work_task_id IS NULL ORDER BY file_id",
                 new MapSqlParameterSource("id", campaignId),
                 String.class);
     }
 
     public List<String> findFileNamesByCampaignId(int campaignId) {
         return jdbc.queryForList(
-                "SELECT file_name FROM campaign_files WHERE campaign_id = :id ORDER BY file_id",
+                "SELECT file_name FROM campaign_files WHERE campaign_id = :id AND work_task_id IS NULL ORDER BY file_id",
                 new MapSqlParameterSource("id", campaignId),
                 String.class);
     }
 
     public void deleteFileByUrl(int campaignId, String fileUrl) {
         jdbc.update(
-                "DELETE FROM campaign_files WHERE campaign_id = :campaignId AND file_url = :fileUrl",
+                "DELETE FROM campaign_files WHERE campaign_id = :campaignId AND file_url = :fileUrl AND work_task_id IS NULL",
                 new MapSqlParameterSource()
                         .addValue("campaignId", campaignId)
+                        .addValue("fileUrl",    fileUrl));
+    }
+
+    // ── Task-specific files (work_task_id IS NOT NULL) ────────────────────────
+
+    public void insertTaskFile(int campaignId, String workTaskId, String fileUrl, String fileName) {
+        jdbc.update("""
+                INSERT INTO campaign_files (campaign_id, work_task_id, file_url, file_name)
+                VALUES (:campaignId, :workTaskId, :fileUrl, :fileName)
+                """,
+                new MapSqlParameterSource()
+                        .addValue("campaignId",  campaignId)
+                        .addValue("workTaskId",  workTaskId)
+                        .addValue("fileUrl",     fileUrl)
+                        .addValue("fileName",    fileName));
+    }
+
+    /**
+     * Returns all task-specific files for a campaign grouped by work_task_id.
+     * Each entry in the inner list is a String[2]: [fileUrl, fileName].
+     */
+    public java.util.Map<String, List<String[]>> findTaskFilesByCampaignId(int campaignId) {
+        java.util.Map<String, List<String[]>> result = new java.util.LinkedHashMap<>();
+        jdbc.query(
+                "SELECT work_task_id, file_url, file_name FROM campaign_files " +
+                "WHERE campaign_id = :id AND work_task_id IS NOT NULL ORDER BY file_id",
+                new MapSqlParameterSource("id", campaignId),
+                (rs) -> {
+                    String taskId   = rs.getString("work_task_id");
+                    String fileUrl  = rs.getString("file_url");
+                    String fileName = rs.getString("file_name");
+                    result.computeIfAbsent(taskId, k -> new java.util.ArrayList<>())
+                          .add(new String[]{fileUrl, fileName});
+                });
+        return result;
+    }
+
+    public void deleteTaskFile(String workTaskId, String fileUrl) {
+        jdbc.update(
+                "DELETE FROM campaign_files WHERE work_task_id = :workTaskId AND file_url = :fileUrl",
+                new MapSqlParameterSource()
+                        .addValue("workTaskId", workTaskId)
                         .addValue("fileUrl",    fileUrl));
     }
 

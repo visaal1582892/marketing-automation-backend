@@ -286,6 +286,22 @@ public class CampaignService {
     }
 
     /**
+     * Paged, filterable REQUESTOR_QC_REVIEW tasks for the caller's campaigns.
+     * Admins see all tasks regardless of requestor.
+     */
+    public PagedResponse<WorkTaskResponse> listRequestorQcTasks(
+            int requestorId, boolean isAdmin,
+            String search, java.time.LocalDate dateFrom, java.time.LocalDate dateTo,
+            int page, int size) {
+        PagedResponse<WorkTask> raw = workTaskRepo.findRequestorQcReviewPaged(
+                requestorId, isAdmin, search, dateFrom, dateTo, page, size);
+        List<WorkTaskResponse> mapped = raw.content().stream()
+                .map(CampaignService::toWorkTaskResponse)
+                .collect(Collectors.toList());
+        return PagedResponse.of(mapped, raw.totalElements(), raw.page(), raw.size());
+    }
+
+    /**
      * Returns every COMPLETED work task across all campaigns (admin / manager view).
      */
     public List<WorkTaskResponse> listAllCompletedTasks() {
@@ -337,6 +353,67 @@ public class CampaignService {
 
         // Route only the newly added (unrouted) deliverables
         routingEngine.route(campaignId, qa);
+
+        return getDetail(campaignId);
+    }
+
+    // -------------------------------------------------------------------------
+    // Requestor — followup tasks (allowed even on COMPLETED campaigns)
+    // -------------------------------------------------------------------------
+
+    /**
+     * Adds new tasks to any non-cancelled/non-rejected campaign, including
+     * COMPLETED ones (which get reopened to IN_PROGRESS automatically via routing).
+     * Per-spec file URLs are linked to the newly created work task after routing.
+     */
+    @Transactional
+    public CampaignResponse addFollowupTasks(int campaignId, FollowupTaskRequest req, int requestorId) {
+        log.info("CAMPAIGN followup-tasks | campaignId={} requestorId={} specsCount={}",
+                campaignId, requestorId, req == null || req.getSpecs() == null ? 0 : req.getSpecs().size());
+        Campaign c = campaignRepo.findById(campaignId)
+                .orElseThrow(() -> new ResourceNotFoundException("Campaign not found: " + campaignId));
+
+        if (c.getRequestorId() != requestorId) {
+            throw new BadRequestException("You can only add tasks to your own campaigns.");
+        }
+        if (c.getStatus() == CampaignStatus.REJECTED || c.getStatus() == CampaignStatus.CANCELLED) {
+            throw new BadRequestException("Cannot add tasks to a campaign that is " + c.getStatus() + ".");
+        }
+        if (req == null || req.getSpecs() == null || req.getSpecs().isEmpty()) {
+            throw new BadRequestException("At least one task must be selected.");
+        }
+
+        Map<String, List<WorkTaskAnswerRequest.AnswerItem>> qa = new LinkedHashMap<>();
+        List<TaskSpecRequest> validSpecs = new java.util.ArrayList<>();
+        for (TaskSpecRequest spec : req.getSpecs()) {
+            if (spec.getGranularTaskId() == null || spec.getGranularTaskId().isBlank()) continue;
+            campaignRepo.insertDeliverable(campaignId, spec.getGranularTaskId());
+            if (spec.getQuestionnaireAnswers() != null && !spec.getQuestionnaireAnswers().isEmpty()) {
+                qa.put(spec.getGranularTaskId(), spec.getQuestionnaireAnswers());
+            }
+            validSpecs.add(spec);
+        }
+
+        // Route newly added tasks; auto-assign non-OTHER tasks immediately.
+        routingEngine.route(campaignId, qa, true);
+
+        // Link per-task reference files to the newly created work tasks
+        for (TaskSpecRequest spec : validSpecs) {
+            List<String> urls  = spec.getFileUrls();
+            if (urls == null || urls.isEmpty()) continue;
+            List<String> names = spec.getFileOriginalNames();
+            workTaskRepo.findLatestByGranularTaskIdAndCampaignId(spec.getGranularTaskId(), campaignId)
+                    .ifPresent(wt -> {
+                        for (int i = 0; i < urls.size(); i++) {
+                            String url  = urls.get(i);
+                            String name = (names != null && i < names.size() && names.get(i) != null)
+                                    ? names.get(i) : url;
+                            if (url != null && !url.isBlank()) {
+                                campaignRepo.insertTaskFile(campaignId, wt.getTaskId(), url, name);
+                            }
+                        }
+                    });
+        }
 
         return getDetail(campaignId);
     }
@@ -411,14 +488,33 @@ public class CampaignService {
         // Add new task deliverables
         if (req.getNewTaskSpecs() != null && !req.getNewTaskSpecs().isEmpty()) {
             Map<String, List<WorkTaskAnswerRequest.AnswerItem>> qa = new LinkedHashMap<>();
+            List<TaskSpecRequest> validSpecs = new java.util.ArrayList<>();
             for (TaskSpecRequest spec : req.getNewTaskSpecs()) {
                 if (spec.getGranularTaskId() == null || spec.getGranularTaskId().isBlank()) continue;
                 campaignRepo.insertDeliverable(campaignId, spec.getGranularTaskId());
                 if (spec.getQuestionnaireAnswers() != null && !spec.getQuestionnaireAnswers().isEmpty()) {
                     qa.put(spec.getGranularTaskId(), spec.getQuestionnaireAnswers());
                 }
+                validSpecs.add(spec);
             }
             routingEngine.route(campaignId, qa);
+            // Link per-task reference files to newly created work tasks
+            for (TaskSpecRequest spec : validSpecs) {
+                List<String> fileUrls = spec.getFileUrls();
+                if (fileUrls == null || fileUrls.isEmpty()) continue;
+                List<String> fileNames = spec.getFileOriginalNames();
+                workTaskRepo.findLatestByGranularTaskIdAndCampaignId(spec.getGranularTaskId(), campaignId)
+                        .ifPresent(wt -> {
+                            for (int fi = 0; fi < fileUrls.size(); fi++) {
+                                String url  = fileUrls.get(fi);
+                                String name = (fileNames != null && fi < fileNames.size() && fileNames.get(fi) != null)
+                                        ? fileNames.get(fi) : url;
+                                if (url != null && !url.isBlank()) {
+                                    campaignRepo.insertTaskFile(campaignId, wt.getTaskId(), url, name);
+                                }
+                            }
+                        });
+            }
         }
 
         // Remove files the requestor explicitly deleted
@@ -571,9 +667,9 @@ public class CampaignService {
         log.info("TASK hold | taskId={} actorId={}", taskId, actorId);
         WorkTask task = workTaskRepo.findById(taskId)
                 .orElseThrow(() -> new ResourceNotFoundException("Task not found: " + taskId));
-        if (task.getStatus() != TaskStatus.ASSIGNED) {
+        if (task.getStatus() != TaskStatus.ASSIGNED && task.getStatus() != TaskStatus.REWORK) {
             throw new BadRequestException(
-                    "Only ASSIGNED tasks can be held — this task is currently "
+                    "Only ASSIGNED or REWORK tasks can be held — this task is currently "
                             + task.getStatus() + ".");
         }
         int updated = workTaskRepo.markHeld(taskId);
@@ -626,14 +722,14 @@ public class CampaignService {
         WorkTask task = workTaskRepo.findById(taskId)
                 .orElseThrow(() -> new ResourceNotFoundException("Task not found: " + taskId));
         TaskStatus s = task.getStatus();
-        if (s != TaskStatus.ASSIGNED && s != TaskStatus.HELD) {
+        if (s != TaskStatus.ASSIGNED && s != TaskStatus.HELD && s != TaskStatus.REWORK) {
             throw new BadRequestException(
-                    "Only ASSIGNED or HELD tasks can be cancelled — this task is " + s + ".");
+                    "Only ASSIGNED, HELD or REWORK tasks can be cancelled — this task is " + s + ".");
         }
         workTaskRepo.markCancelled(taskId);
         log.info("TASK cancelled | taskId={} previousStatus={} assignee={}",
                 taskId, s, task.getAssignedTo());
-        if (task.getAssignedTo() != null && s == TaskStatus.ASSIGNED) {
+        if (task.getAssignedTo() != null && (s == TaskStatus.ASSIGNED || s == TaskStatus.REWORK)) {
             userRepo.decrementActiveTasks(task.getAssignedTo().longValue());
         }
         // Auto-cancel the campaign when all its tasks are now terminal.
@@ -687,8 +783,8 @@ public class CampaignService {
      * assignee rather than letting the engine pick the least-loaded user.
      */
     @Transactional
-    public WorkTaskResponse assignHeldTaskToUser(String taskId, int userId) {
-        log.info("TASK manualAssign | taskId={} targetUserId={}", taskId, userId);
+    public WorkTaskResponse assignHeldTaskToUser(String taskId, int userId, int actorId) {
+        log.info("TASK manualAssign | taskId={} targetUserId={} actorId={}", taskId, userId, actorId);
         WorkTask task = workTaskRepo.findById(taskId)
                 .orElseThrow(() -> new ResourceNotFoundException("Task not found: " + taskId));
         if (task.getStatus() != TaskStatus.HELD) {
@@ -701,6 +797,9 @@ public class CampaignService {
             throw new BadRequestException("Could not assign task — it may no longer be on hold.");
         }
         userRepo.incrementActiveTasks(assignee.getUserId());
+        approvalLogRepo.insert(ApprovalLog.builder()
+                .taskId(taskId).reviewerId(actorId)
+                .actionTaken(ApprovalAction.UNHOLD).build());
         log.info("TASK manually assigned | taskId={} assigneeId={} assigneeName={}",
                 taskId, assignee.getUserId(), assignee.getFullName());
         return toWorkTaskResponse(workTaskRepo.findById(taskId).orElseThrow());
@@ -737,7 +836,7 @@ public class CampaignService {
         if (workTaskOpt.isPresent()) {
             WorkTask wt = workTaskOpt.get();
             TaskStatus status = wt.getStatus();
-            if (status == TaskStatus.IN_PROGRESS || status == TaskStatus.QC_REVIEW
+            if (status == TaskStatus.IN_PROGRESS || status == TaskStatus.MANAGER_QC_REVIEW
                     || status == TaskStatus.REWORK || status == TaskStatus.COMPLETED) {
                 throw new BadRequestException(
                         "Cannot delete task '" + deliverable.getGranularTaskName()
@@ -753,6 +852,23 @@ public class CampaignService {
         }
 
         campaignRepo.deleteDeliverableBySpecId(specId);
+
+        // Recompute campaign status: if no tasks are pending any more, mark COMPLETED.
+        recomputeCampaignStatusAfterTaskChange(campaignId);
+    }
+
+    /**
+     * After a task is deleted, recalculate whether the campaign should now be COMPLETED.
+     * Sets COMPLETED only when every remaining task is COMPLETED/CANCELLED/REJECTED
+     * AND at least one COMPLETED task still exists.
+     */
+    private void recomputeCampaignStatusAfterTaskChange(int campaignId) {
+        int pending   = workTaskRepo.countPendingRequestorApproval(campaignId);
+        int completed = workTaskRepo.countCompleted(campaignId);
+        if (pending == 0 && completed > 0) {
+            campaignRepo.updateStatus(campaignId, CampaignStatus.COMPLETED);
+            log.info("TASK delete → all remaining tasks done — campaign COMPLETED | campaignId={}", campaignId);
+        }
     }
 
     /**
@@ -821,8 +937,19 @@ public class CampaignService {
                 .stream()
                 .map(d -> toDeliverableResponse(d, statusByGranularTask.get(d.getGranularTaskId())))
                 .collect(Collectors.toList());
+        // Campaign-level files (work_task_id IS NULL)
         List<String> fileUrls        = campaignRepo.findFileUrlsByCampaignId(cid);
         List<String> fileOriginalNames = campaignRepo.findFileNamesByCampaignId(cid);
+
+        // Task-specific files — hydrate onto each WorkTaskResponse
+        java.util.Map<String, java.util.List<String[]>> taskFilesMap =
+                campaignRepo.findTaskFilesByCampaignId(cid);
+        workTasks.forEach(t -> {
+            java.util.List<String[]> rows = taskFilesMap.getOrDefault(t.getTaskId(), java.util.List.of());
+            t.setFileUrls(rows.stream().map(r -> r[0]).collect(Collectors.toList()));
+            t.setFileOriginalNames(rows.stream().map(r -> r[1]).collect(Collectors.toList()));
+        });
+
         CampaignResponse resp = toSummaryResponse(c);
         resp.setDeliverables(deliverables);
         resp.setWorkTasks(workTasks);
@@ -925,7 +1052,8 @@ public class CampaignService {
                 .acceptedAt(wt.getAcceptedAt())
                 .startedAt(wt.getStartedAt())
                 .submittedAt(wt.getSubmittedAt())
-                .completedAt(wt.getCompletedAt())
+                .managerApprovedAt(wt.getManagerApprovedAt())
+                .requestorApprovedAt(wt.getRequestorApprovedAt())
                 .totalTimeLoggedMinutes(wt.getTotalTimeLoggedMinutes())
                 .dynamicDeadline(wt.getDynamicDeadline())
                 .submissionNotes(wt.getSubmissionNotes())
@@ -934,6 +1062,8 @@ public class CampaignService {
                 .requestorReworkCount(wt.getRequestorReworkCount())
                 .latestManagerReworkComment(wt.getLatestManagerReworkComment())
                 .latestRequestorReworkComment(wt.getLatestRequestorReworkComment())
+                .latestReworkComment(wt.getLatestReworkComment())
+                .latestReworkSource(wt.getLatestReworkSource())
                 .collaborationStarted(wt.isCollaborationStarted())
                 .collaborationActive(wt.isCollaborationActive())
                 .build();
@@ -951,10 +1081,10 @@ public class CampaignService {
     /**
      * When two work tasks share the same granular_task_id in a campaign, keep the
      * status that is "more progressed" so the frontend correctly blocks deletion.
-     * Order: COMPLETED > QC_REVIEW > REWORK > IN_PROGRESS > ACCEPTED > ASSIGNED > HELD > CANCELLED
+     * Order: COMPLETED > REQUESTOR_QC_REVIEW > MANAGER_QC_REVIEW > REWORK > IN_PROGRESS > ACCEPTED > ASSIGNED > HELD > CANCELLED
      */
     private static String prioritiseTaskStatus(String a, String b) {
-        List<String> order = List.of("CANCELLED","HELD","ASSIGNED","ACCEPTED","IN_PROGRESS","REWORK","QC_REVIEW","COMPLETED");
+        List<String> order = List.of("CANCELLED","HELD","ASSIGNED","ACCEPTED","IN_PROGRESS","REWORK","MANAGER_QC_REVIEW","REQUESTOR_QC_REVIEW","COMPLETED");
         return order.indexOf(a) >= order.indexOf(b) ? a : b;
     }
 

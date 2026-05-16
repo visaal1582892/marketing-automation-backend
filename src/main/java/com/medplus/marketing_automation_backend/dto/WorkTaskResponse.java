@@ -5,6 +5,7 @@ import lombok.*;
 
 import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.util.ArrayList;
 import java.util.List;
 
 @Data
@@ -39,7 +40,8 @@ public class WorkTaskResponse {
     private LocalDateTime acceptedAt;
     private LocalDateTime startedAt;
     private LocalDateTime submittedAt;
-    private LocalDateTime completedAt;
+    private LocalDateTime managerApprovedAt;
+    private LocalDateTime requestorApprovedAt;
     private Integer       totalTimeLoggedMinutes;
     private LocalDateTime dynamicDeadline;
     private String        submissionNotes;
@@ -76,6 +78,12 @@ public class WorkTaskResponse {
      */
     private String        latestRequestorReworkComment;
 
+    /** Most recent rework comment across both manager and requestor (derived). */
+    private String        latestReworkComment;
+
+    /** "NEEDS_REWORK" or "REQUESTOR_REWORK" — source of latestReworkComment. */
+    private String        latestReworkSource;
+
     /** Requestor/worker answers for mapped dynamic questions (campaign brief). */
     private List<WorkTaskQuestionnaireBriefItem> questionnaire;
 
@@ -87,7 +95,7 @@ public class WorkTaskResponse {
 
     /**
      * True when collaboration is currently open (chat + asset uploads enabled).
-     * False when the task is HELD, QC_REVIEW, COMPLETED, or owner manually paused.
+     * False when the task is HELD, MANAGER_QC_REVIEW, COMPLETED, or owner manually paused.
      */
     private boolean collaborationActive;
 
@@ -121,4 +129,11 @@ public class WorkTaskResponse {
 
     /** Actual work-task status (e.g. REWORK, IN_PROGRESS) of the linked content task. */
     private String contentTaskStatus;
+
+    /**
+     * Reference files uploaded by the requestor specifically for this task.
+     * Stored in campaign_files with work_task_id = this task's task_id.
+     */
+    private List<String> fileUrls        = new ArrayList<>();
+    private List<String> fileOriginalNames = new ArrayList<>();
 }

@@ -1,40 +1,44 @@
-2026-05-12 19:26:30.048  INFO [background-preinit] org.hibernate.validator.internal.util.Version      : HV000001: Hibernate Validator 9.0.1.Final
-2026-05-12 19:26:30.105  INFO [main] c.m.m.MarketingAutomationBackendApplicationTests   : Starting MarketingAutomationBackendApplicationTests using Java 25.0.3 with PID 26296 (started by Medplus in d:\RohitWorkspace\prod\marketing-automation\marketing-automation-backend)
-2026-05-12 19:26:30.107 DEBUG [main] c.m.m.MarketingAutomationBackendApplicationTests   : Running with Spring Boot v4.0.5, Spring v7.0.6
-2026-05-12 19:26:30.109  INFO [main] c.m.m.MarketingAutomationBackendApplicationTests   : No active profile set, falling back to 1 default profile: "default"
-2026-05-12 19:26:32.268  INFO [main] o.s.d.r.config.RepositoryConfigurationDelegate     : Bootstrapping Spring Data JDBC repositories in DEFAULT mode.
-2026-05-12 19:26:32.325  INFO [main] o.s.d.r.config.RepositoryConfigurationDelegate     : Finished Spring Data repository scanning in 47 ms. Found 0 JDBC repository interfaces.
-2026-05-12 19:26:34.842  INFO [main] $InitializeAuthenticationProviderManagerConfigurer : Global AuthenticationManager configured with AuthenticationProvider bean with name authenticationProvider
-2026-05-12 19:26:34.843  WARN [main] rConfigurer$InitializeUserDetailsManagerConfigurer : Global AuthenticationManager configured with an AuthenticationProvider bean. UserDetailsService beans will not be used by Spring Security for automatically configuring username/password login. Consider removing the AuthenticationProvider bean. Alternatively, consider using the UserDetailsService in a manually instantiated DaoAuthenticationProvider. If the current configuration is intentional, to turn off this warning, increase the logging level of 'org.springframework.security.config.annotation.authentication.configuration.InitializeUserDetailsBeanManagerConfigurer' to ERROR
-2026-05-12 19:26:36.947  INFO [main] o.s.m.simp.broker.SimpleBrokerMessageHandler       : Starting...
-2026-05-12 19:26:36.949  INFO [main] o.s.m.simp.broker.SimpleBrokerMessageHandler       : BrokerAvailabilityEvent[available=true, SimpleBrokerMessageHandler [org.springframework.messaging.simp.broker.DefaultSubscriptionRegistry@6d77d269]]
-2026-05-12 19:26:36.950  INFO [main] o.s.m.simp.broker.SimpleBrokerMessageHandler       : Started.
-2026-05-12 19:26:36.958  INFO [main] c.m.m.MarketingAutomationBackendApplicationTests   : Started MarketingAutomationBackendApplicationTests in 7.578 seconds (process running for 10.399)
-2026-05-12 19:26:37.027  INFO [main] c.m.m.config.FlywaySchemaRepairRunner              : FlywaySchemaRepairRunner: task_type_id column already exists on campaigns table.
-2026-05-12 19:26:37.058  INFO [main] c.m.m.config.FlywaySchemaRepairRunner              : FlywaySchemaRepairRunner: approvals_log action_taken ENUM extended (HELD/UNHOLD).
-2026-05-12 19:26:37.114  INFO [main] c.m.m.config.FlywaySchemaRepairRunner              : FlywaySchemaRepairRunner: work_tasks status ENUM extended to include REJECTED.
-2026-05-12 19:26:37.258  INFO [main] c.m.m.config.DataInitializer                       : Default admin user already exists (admin@medplus.com)
-2026-05-12 19:26:37.263  INFO [main] c.m.m.config.ActiveTaskCountReconciler             : ActiveTaskCountReconciler: realigned current_active_tasks for 50 user row(s).
-2026-05-12 19:26:38.986  INFO [SpringApplicationShutdownHook] o.s.m.simp.broker.SimpleBrokerMessageHandler       : Stopping...
-2026-05-12 19:26:38.989  INFO [SpringApplicationShutdownHook] o.s.m.simp.broker.SimpleBrokerMessageHandler       : BrokerAvailabilityEvent[available=false, SimpleBrokerMessageHandler [org.springframework.messaging.simp.broker.DefaultSubscriptionRegistry@6d77d269]]
-2026-05-12 19:26:38.990  INFO [SpringApplicationShutdownHook] o.s.m.simp.broker.SimpleBrokerMessageHandler       : Stopped.
-2026-05-12 19:45:26.437  INFO [background-preinit] org.hibernate.validator.internal.util.Version      : HV000001: Hibernate Validator 9.0.1.Final
-2026-05-12 19:45:26.488  INFO [main] c.m.m.MarketingAutomationBackendApplicationTests   : Starting MarketingAutomationBackendApplicationTests using Java 25.0.3 with PID 14564 (started by Medplus in d:\RohitWorkspace\prod\marketing-automation\marketing-automation-backend)
-2026-05-12 19:45:26.490 DEBUG [main] c.m.m.MarketingAutomationBackendApplicationTests   : Running with Spring Boot v4.0.5, Spring v7.0.6
-2026-05-12 19:45:26.492  INFO [main] c.m.m.MarketingAutomationBackendApplicationTests   : No active profile set, falling back to 1 default profile: "default"
-2026-05-12 19:45:28.670  INFO [main] o.s.d.r.config.RepositoryConfigurationDelegate     : Bootstrapping Spring Data JDBC repositories in DEFAULT mode.
-2026-05-12 19:45:28.724  INFO [main] o.s.d.r.config.RepositoryConfigurationDelegate     : Finished Spring Data repository scanning in 44 ms. Found 0 JDBC repository interfaces.
-2026-05-12 19:45:31.490  INFO [main] $InitializeAuthenticationProviderManagerConfigurer : Global AuthenticationManager configured with AuthenticationProvider bean with name authenticationProvider
-2026-05-12 19:45:31.491  WARN [main] rConfigurer$InitializeUserDetailsManagerConfigurer : Global AuthenticationManager configured with an AuthenticationProvider bean. UserDetailsService beans will not be used by Spring Security for automatically configuring username/password login. Consider removing the AuthenticationProvider bean. Alternatively, consider using the UserDetailsService in a manually instantiated DaoAuthenticationProvider. If the current configuration is intentional, to turn off this warning, increase the logging level of 'org.springframework.security.config.annotation.authentication.configuration.InitializeUserDetailsBeanManagerConfigurer' to ERROR
-2026-05-12 19:45:33.514  INFO [main] o.s.m.simp.broker.SimpleBrokerMessageHandler       : Starting...
-2026-05-12 19:45:33.517  INFO [main] o.s.m.simp.broker.SimpleBrokerMessageHandler       : BrokerAvailabilityEvent[available=true, SimpleBrokerMessageHandler [org.springframework.messaging.simp.broker.DefaultSubscriptionRegistry@6d77d269]]
-2026-05-12 19:45:33.519  INFO [main] o.s.m.simp.broker.SimpleBrokerMessageHandler       : Started.
-2026-05-12 19:45:33.529  INFO [main] c.m.m.MarketingAutomationBackendApplicationTests   : Started MarketingAutomationBackendApplicationTests in 7.871 seconds (process running for 10.07)
-2026-05-12 19:45:33.619  INFO [main] c.m.m.config.FlywaySchemaRepairRunner              : FlywaySchemaRepairRunner: task_type_id column already exists on campaigns table.
-2026-05-12 19:45:33.657  INFO [main] c.m.m.config.FlywaySchemaRepairRunner              : FlywaySchemaRepairRunner: approvals_log action_taken ENUM extended (HELD/UNHOLD).
-2026-05-12 19:45:33.726  INFO [main] c.m.m.config.FlywaySchemaRepairRunner              : FlywaySchemaRepairRunner: work_tasks status ENUM extended to include REJECTED.
-2026-05-12 19:45:33.883  INFO [main] c.m.m.config.DataInitializer                       : Default admin user already exists (admin@medplus.com)
-2026-05-12 19:45:33.888  INFO [main] c.m.m.config.ActiveTaskCountReconciler             : ActiveTaskCountReconciler: realigned current_active_tasks for 50 user row(s).
-2026-05-12 19:45:35.055  INFO [SpringApplicationShutdownHook] o.s.m.simp.broker.SimpleBrokerMessageHandler       : Stopping...
-2026-05-12 19:45:35.056  INFO [SpringApplicationShutdownHook] o.s.m.simp.broker.SimpleBrokerMessageHandler       : BrokerAvailabilityEvent[available=false, SimpleBrokerMessageHandler [org.springframework.messaging.simp.broker.DefaultSubscriptionRegistry@6d77d269]]
-2026-05-12 19:45:35.058  INFO [SpringApplicationShutdownHook] o.s.m.simp.broker.SimpleBrokerMessageHandler       : Stopped.
+2026-05-15 18:54:38.819  INFO [background-preinit] org.hibernate.validator.internal.util.Version      : HV000001: Hibernate Validator 9.0.1.Final
+2026-05-15 18:54:38.901  INFO [main] c.m.m.MarketingAutomationBackendApplicationTests   : Starting MarketingAutomationBackendApplicationTests using Java 25.0.3 with PID 8188 (started by Medplus in d:\RohitWorkspace\prod\marketing-automation\marketing-automation-backend)
+2026-05-15 18:54:38.902 DEBUG [main] c.m.m.MarketingAutomationBackendApplicationTests   : Running with Spring Boot v4.0.5, Spring v7.0.6
+2026-05-15 18:54:38.906  INFO [main] c.m.m.MarketingAutomationBackendApplicationTests   : No active profile set, falling back to 1 default profile: "default"
+2026-05-15 18:54:41.927  INFO [main] o.s.d.r.config.RepositoryConfigurationDelegate     : Bootstrapping Spring Data JDBC repositories in DEFAULT mode.
+2026-05-15 18:54:42.010  INFO [main] o.s.d.r.config.RepositoryConfigurationDelegate     : Finished Spring Data repository scanning in 70 ms. Found 0 JDBC repository interfaces.
+2026-05-15 18:54:44.851  INFO [main] $InitializeAuthenticationProviderManagerConfigurer : Global AuthenticationManager configured with AuthenticationProvider bean with name authenticationProvider
+2026-05-15 18:54:44.852  WARN [main] rConfigurer$InitializeUserDetailsManagerConfigurer : Global AuthenticationManager configured with an AuthenticationProvider bean. UserDetailsService beans will not be used by Spring Security for automatically configuring username/password login. Consider removing the AuthenticationProvider bean. Alternatively, consider using the UserDetailsService in a manually instantiated DaoAuthenticationProvider. If the current configuration is intentional, to turn off this warning, increase the logging level of 'org.springframework.security.config.annotation.authentication.configuration.InitializeUserDetailsBeanManagerConfigurer' to ERROR
+2026-05-15 18:54:47.566  INFO [main] o.s.m.simp.broker.SimpleBrokerMessageHandler       : Starting...
+2026-05-15 18:54:47.569  INFO [main] o.s.m.simp.broker.SimpleBrokerMessageHandler       : BrokerAvailabilityEvent[available=true, SimpleBrokerMessageHandler [org.springframework.messaging.simp.broker.DefaultSubscriptionRegistry@565030b7]]
+2026-05-15 18:54:47.571  INFO [main] o.s.m.simp.broker.SimpleBrokerMessageHandler       : Started.
+2026-05-15 18:54:47.584  INFO [main] c.m.m.MarketingAutomationBackendApplicationTests   : Started MarketingAutomationBackendApplicationTests in 9.527 seconds (process running for 12.124)
+2026-05-15 18:54:47.713  INFO [main] c.m.m.config.FlywaySchemaRepairRunner              : FlywaySchemaRepairRunner: task_type_id column already exists on campaigns table.
+2026-05-15 18:54:47.760  INFO [main] c.m.m.config.FlywaySchemaRepairRunner              : FlywaySchemaRepairRunner: approvals_log action_taken ENUM extended (HELD/UNHOLD).
+2026-05-15 18:54:47.820  INFO [main] c.m.m.config.FlywaySchemaRepairRunner              : FlywaySchemaRepairRunner: campaigns status ENUM extended to include MANAGER_QC_REVIEW and REQUESTOR_QC_REVIEW.
+2026-05-15 18:54:47.888  INFO [main] c.m.m.config.FlywaySchemaRepairRunner              : FlywaySchemaRepairRunner: work_tasks status ENUM extended to include MANAGER_QC_REVIEW and REQUESTOR_QC_REVIEW.
+2026-05-15 18:54:48.066  INFO [main] c.m.m.config.FlywaySchemaRepairRunner              : FlywaySchemaRepairRunner: ensured role_task_mapping for TASK-AUTO-CONTENT (roles 4, 5).
+2026-05-15 18:54:48.083  INFO [main] c.m.m.config.DataInitializer                       : Default admin user already exists (admin@medplus.com)
+2026-05-15 18:54:48.088  INFO [main] c.m.m.config.ActiveTaskCountReconciler             : ActiveTaskCountReconciler: realigned current_active_tasks for 51 user row(s).
+2026-05-15 18:54:49.593  INFO [SpringApplicationShutdownHook] o.s.m.simp.broker.SimpleBrokerMessageHandler       : Stopping...
+2026-05-15 18:54:49.593  INFO [SpringApplicationShutdownHook] o.s.m.simp.broker.SimpleBrokerMessageHandler       : BrokerAvailabilityEvent[available=false, SimpleBrokerMessageHandler [org.springframework.messaging.simp.broker.DefaultSubscriptionRegistry@565030b7]]
+2026-05-15 18:54:49.594  INFO [SpringApplicationShutdownHook] o.s.m.simp.broker.SimpleBrokerMessageHandler       : Stopped.
+2026-05-15 20:08:32.284  INFO [background-preinit] org.hibernate.validator.internal.util.Version      : HV000001: Hibernate Validator 9.0.1.Final
+2026-05-15 20:08:32.329  INFO [main] c.m.m.MarketingAutomationBackendApplicationTests   : Starting MarketingAutomationBackendApplicationTests using Java 25.0.3 with PID 14408 (started by Medplus in d:\RohitWorkspace\prod\marketing-automation\marketing-automation-backend)
+2026-05-15 20:08:32.330 DEBUG [main] c.m.m.MarketingAutomationBackendApplicationTests   : Running with Spring Boot v4.0.5, Spring v7.0.6
+2026-05-15 20:08:32.332  INFO [main] c.m.m.MarketingAutomationBackendApplicationTests   : No active profile set, falling back to 1 default profile: "default"
+2026-05-15 20:08:34.128  INFO [main] o.s.d.r.config.RepositoryConfigurationDelegate     : Bootstrapping Spring Data JDBC repositories in DEFAULT mode.
+2026-05-15 20:08:34.182  INFO [main] o.s.d.r.config.RepositoryConfigurationDelegate     : Finished Spring Data repository scanning in 44 ms. Found 0 JDBC repository interfaces.
+2026-05-15 20:08:36.431  INFO [main] $InitializeAuthenticationProviderManagerConfigurer : Global AuthenticationManager configured with AuthenticationProvider bean with name authenticationProvider
+2026-05-15 20:08:36.431  WARN [main] rConfigurer$InitializeUserDetailsManagerConfigurer : Global AuthenticationManager configured with an AuthenticationProvider bean. UserDetailsService beans will not be used by Spring Security for automatically configuring username/password login. Consider removing the AuthenticationProvider bean. Alternatively, consider using the UserDetailsService in a manually instantiated DaoAuthenticationProvider. If the current configuration is intentional, to turn off this warning, increase the logging level of 'org.springframework.security.config.annotation.authentication.configuration.InitializeUserDetailsBeanManagerConfigurer' to ERROR
+2026-05-15 20:08:38.682  INFO [main] o.s.m.simp.broker.SimpleBrokerMessageHandler       : Starting...
+2026-05-15 20:08:38.684  INFO [main] o.s.m.simp.broker.SimpleBrokerMessageHandler       : BrokerAvailabilityEvent[available=true, SimpleBrokerMessageHandler [org.springframework.messaging.simp.broker.DefaultSubscriptionRegistry@7156f8cf]]
+2026-05-15 20:08:38.686  INFO [main] o.s.m.simp.broker.SimpleBrokerMessageHandler       : Started.
+2026-05-15 20:08:38.694  INFO [main] c.m.m.MarketingAutomationBackendApplicationTests   : Started MarketingAutomationBackendApplicationTests in 7.196 seconds (process running for 9.709)
+2026-05-15 20:08:38.781  INFO [main] c.m.m.config.FlywaySchemaRepairRunner              : FlywaySchemaRepairRunner: task_type_id column already exists on campaigns table.
+2026-05-15 20:08:38.813  INFO [main] c.m.m.config.FlywaySchemaRepairRunner              : FlywaySchemaRepairRunner: approvals_log action_taken ENUM extended (HELD/UNHOLD).
+2026-05-15 20:08:38.870  INFO [main] c.m.m.config.FlywaySchemaRepairRunner              : FlywaySchemaRepairRunner: campaigns status ENUM extended to include MANAGER_QC_REVIEW and REQUESTOR_QC_REVIEW.
+2026-05-15 20:08:38.958  INFO [main] c.m.m.config.FlywaySchemaRepairRunner              : FlywaySchemaRepairRunner: work_tasks status ENUM extended to include MANAGER_QC_REVIEW and REQUESTOR_QC_REVIEW.
+2026-05-15 20:08:39.186  INFO [main] c.m.m.config.FlywaySchemaRepairRunner              : FlywaySchemaRepairRunner: ensured role_task_mapping for TASK-AUTO-CONTENT (roles 4, 5).
+2026-05-15 20:08:39.207  INFO [main] c.m.m.config.DataInitializer                       : Default admin user already exists (admin@medplus.com)
+2026-05-15 20:08:39.212  INFO [main] c.m.m.config.ActiveTaskCountReconciler             : ActiveTaskCountReconciler: realigned current_active_tasks for 51 user row(s).
+2026-05-15 20:08:40.525  INFO [SpringApplicationShutdownHook] o.s.m.simp.broker.SimpleBrokerMessageHandler       : Stopping...
+2026-05-15 20:08:40.525  INFO [SpringApplicationShutdownHook] o.s.m.simp.broker.SimpleBrokerMessageHandler       : BrokerAvailabilityEvent[available=false, SimpleBrokerMessageHandler [org.springframework.messaging.simp.broker.DefaultSubscriptionRegistry@7156f8cf]]
+2026-05-15 20:08:40.526  INFO [SpringApplicationShutdownHook] o.s.m.simp.broker.SimpleBrokerMessageHandler       : Stopped.

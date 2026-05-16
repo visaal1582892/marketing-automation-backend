@@ -56,7 +56,7 @@ public class WorkTaskRepository {
                    wt.is_collaboration_started,
                    wt.is_collaboration_active,
                    wt.assigned_at, wt.accepted_at, wt.started_at,
-                   wt.submitted_at, wt.completed_at,
+                   wt.submitted_at, wt.manager_approved_at, wt.requestor_approved_at,
                    wt.total_time_logged_minutes, wt.dynamic_deadline,
                    wt.submission_notes,
                    wt.created_at, wt.updated_at,
@@ -82,6 +82,14 @@ public class WorkTaskRepository {
                      WHERE al.task_id = wt.task_id
                        AND al.action_taken = 'REQUESTOR_REWORK'
                      ORDER BY al.created_at DESC LIMIT 1) AS latest_requestor_rework_comment,
+                   (SELECT al.comments FROM approvals_log al
+                     WHERE al.task_id = wt.task_id
+                       AND al.action_taken IN ('NEEDS_REWORK','REQUESTOR_REWORK')
+                     ORDER BY al.created_at DESC LIMIT 1) AS latest_rework_comment,
+                   (SELECT al.action_taken FROM approvals_log al
+                     WHERE al.task_id = wt.task_id
+                       AND al.action_taken IN ('NEEDS_REWORK','REQUESTOR_REWORK')
+                     ORDER BY al.created_at DESC LIMIT 1) AS latest_rework_source,
                    (SELECT u_adb.full_name FROM approvals_log al_adb
                      LEFT JOIN users u_adb ON u_adb.user_id = al_adb.reviewer_id
                      WHERE al_adb.task_id = wt.task_id
@@ -152,15 +160,15 @@ public class WorkTaskRepository {
     }
 
     /**
-     * Marks a task as QC_REVIEW and logs time spent + creator's submission.
-     * Stores the submission timestamp in `submitted_at` (not `completed_at` —
-     * `completed_at` is reserved for the QC manager's approval timestamp).
+     * Marks a task as MANAGER_QC_REVIEW and logs time spent + creator's submission.
+     * Stores the submission timestamp in `submitted_at` (not `manager_approved_at` —
+     * `manager_approved_at` is reserved for the QC manager's approval timestamp).
      */
     public int complete(String taskId, int userId, LocalDateTime submittedAt, int minutesSpent,
                         String submissionNotes) {
         return jdbc.update("""
                 UPDATE work_tasks
-                SET status = 'QC_REVIEW',
+                SET status = 'MANAGER_QC_REVIEW',
                     submitted_at = :submittedAt,
                     total_time_logged_minutes = :minutes,
                     submission_notes = :notes
@@ -175,14 +183,15 @@ public class WorkTaskRepository {
                         .addValue("userId",  userId));
     }
 
-    /** Auto-created content tasks skip QC and complete directly. */
+    /** Auto-created content tasks skip both QC stages and complete directly. */
     public int completeAutoAssigned(String taskId, int userId, LocalDateTime completedAt,
                                     int minutesSpent, String submissionNotes) {
         return jdbc.update("""
                 UPDATE work_tasks
                 SET status = 'COMPLETED',
                     submitted_at = :completedAt,
-                    completed_at = :completedAt,
+                    manager_approved_at = :completedAt,
+                    requestor_approved_at = :completedAt,
                     total_time_logged_minutes = :minutes,
                     submission_notes = :notes,
                     updated_at = CURRENT_TIMESTAMP(6)
@@ -197,12 +206,29 @@ public class WorkTaskRepository {
                         .addValue("userId",  userId));
     }
 
-    /** Marks the task as fully COMPLETED (QC manager approved). Stamps completed_at = now. */
-    public int markCompleted(String taskId) {
+    /**
+     * Manager approved the task — moves to REQUESTOR_QC_REVIEW. Stamps manager_approved_at = now.
+     * Worker's capacity slot is freed at this point.
+     */
+    public int markManagerApproved(String taskId) {
+        return jdbc.update("""
+                UPDATE work_tasks
+                   SET status = 'REQUESTOR_QC_REVIEW',
+                       manager_approved_at = :now
+                 WHERE task_id = :id
+                """,
+                new MapSqlParameterSource("id", taskId)
+                        .addValue("now", Timestamp.valueOf(LocalDateTime.now())));
+    }
+
+    /**
+     * Requestor approved the task — moves to COMPLETED. Stamps requestor_approved_at = now.
+     */
+    public int markRequestorApproved(String taskId) {
         return jdbc.update("""
                 UPDATE work_tasks
                    SET status = 'COMPLETED',
-                       completed_at = :now
+                       requestor_approved_at = :now
                  WHERE task_id = :id
                 """,
                 new MapSqlParameterSource("id", taskId)
@@ -250,19 +276,16 @@ public class WorkTaskRepository {
     }
 
     /**
-     * Sends the task back for rework. Clears both {@code submitted_at} and
-     * {@code completed_at} so the lifecycle timeline accurately reflects the
-     * current cycle — the worker has not yet submitted this round, and the
-     * task was never QC-approved. The historical submission timestamps live
-     * in {@code approval_logs}, which is the right place to inspect prior
-     * QC attempts.
+     * Sends the task back for rework. Clears {@code submitted_at} and
+     * {@code manager_approved_at} so the lifecycle timeline accurately reflects the
+     * current cycle. Historical timestamps live in {@code approval_logs}.
      */
     public int markRework(String taskId) {
         return jdbc.update("""
                 UPDATE work_tasks
-                   SET status       = 'REWORK',
-                       submitted_at = NULL,
-                       completed_at = NULL
+                   SET status              = 'REWORK',
+                       submitted_at        = NULL,
+                       manager_approved_at = NULL
                  WHERE task_id = :id
                 """,
                 new MapSqlParameterSource("id", taskId));
@@ -284,7 +307,7 @@ public class WorkTaskRepository {
                 UPDATE work_tasks
                    SET status = 'HELD'
                  WHERE task_id = :id
-                   AND status  = 'ASSIGNED'
+                   AND status IN ('ASSIGNED', 'REWORK')
                 """,
                 new MapSqlParameterSource("id", taskId));
     }
@@ -371,7 +394,7 @@ public class WorkTaskRepository {
 
     /**
      * Holds a task for collaboration — works from any active status
-     * (ASSIGNED, ACCEPTED, IN_PROGRESS, REWORK, QC_REVIEW).
+     * (ASSIGNED, ACCEPTED, IN_PROGRESS, REWORK, MANAGER_QC_REVIEW).
      * Saves the current status in pre_hold_status so it can be restored on resume.
      */
     public int holdForCollaboration(String taskId) {
@@ -458,7 +481,7 @@ public class WorkTaskRepository {
                 SELECT COUNT(*)
                   FROM work_tasks
                  WHERE assigned_to = :uid
-                   AND status IN ('ASSIGNED','ACCEPTED','IN_PROGRESS','REWORK','QC_REVIEW')
+                   AND status IN ('ASSIGNED','ACCEPTED','IN_PROGRESS','REWORK','MANAGER_QC_REVIEW')
                 """,
                 new MapSqlParameterSource("uid", userId),
                 Integer.class);
@@ -560,7 +583,7 @@ public class WorkTaskRepository {
      *   2. Then open work in priority order: HIGH+Paid Ads → HIGH → MEDIUM
      *      → LOW. Within a priority bucket, REWORK comes before fresh
      *      ASSIGNED items because rework is more time-sensitive.
-     *   3. Then QC_REVIEW (waiting on the manager).
+     *   3. Then MANAGER_QC_REVIEW (waiting on the manager) / REQUESTOR_QC_REVIEW (waiting on requestor).
      *   4. Then terminal states (COMPLETED / CANCELLED) at the bottom.
      *   5. Final tie-break is updated_at DESC so recently-touched tasks surface first.
      */
@@ -572,15 +595,16 @@ public class WorkTaskRepository {
                  WHERE wt.assigned_to = :uid
                  ORDER BY
                    CASE wt.status
-                     WHEN 'IN_PROGRESS' THEN 0
-                     WHEN 'REWORK'      THEN 1
-                     WHEN 'ASSIGNED'    THEN 1
-                     WHEN 'QC_REVIEW'   THEN 2
-                     WHEN 'HELD'        THEN 3
-                     WHEN 'COMPLETED'   THEN 4
-                     WHEN 'CANCELLED'   THEN 5
-                     WHEN 'REJECTED'    THEN 5
-                     ELSE                    6
+                     WHEN 'IN_PROGRESS'         THEN 0
+                     WHEN 'REWORK'              THEN 1
+                     WHEN 'ASSIGNED'            THEN 1
+                     WHEN 'MANAGER_QC_REVIEW'   THEN 2
+                     WHEN 'REQUESTOR_QC_REVIEW' THEN 2
+                     WHEN 'HELD'                THEN 3
+                     WHEN 'COMPLETED'           THEN 4
+                     WHEN 'CANCELLED'           THEN 5
+                     WHEN 'REJECTED'            THEN 5
+                     ELSE                            6
                    END,
                    CASE
                      WHEN c.priority = 'HIGH' AND tt.task_name = 'Paid Ads' THEN 0
@@ -620,14 +644,88 @@ public class WorkTaskRepository {
      * All COMPLETED work tasks belonging to campaigns requested by the given
      * requestor. Used by the requestor's "Completed Tasks" page to show every
      * approved deliverable along with its submitted assets.
-     * Ordered newest-first by completed_at so the most recently approved task
-     * appears at the top.
+     * Ordered newest-first by requestor_approved_at so the most recently approved task appears first.
      */
     public List<WorkTask> findCompletedByRequestorId(int requestorId) {
         String sql = SELECT_BASE +
                 " WHERE c.requestor_id = :requestorId AND wt.status = 'COMPLETED'" +
                 " AND NOT EXISTS (SELECT 1 FROM auto_created_tasks act WHERE act.created_task_id = wt.task_id)" +
-                " ORDER BY wt.completed_at DESC";
+                " ORDER BY COALESCE(wt.requestor_approved_at, wt.manager_approved_at) DESC";
+        return jdbc.query(sql,
+                new MapSqlParameterSource("requestorId", requestorId),
+                WorkTaskRepository::map);
+    }
+
+    /** All REQUESTOR_QC_REVIEW tasks across all campaigns — admin/manager view. */
+    public List<WorkTask> findAllRequestorQcReview() {
+        String sql = SELECT_BASE +
+                " WHERE wt.status = 'REQUESTOR_QC_REVIEW'" +
+                " AND c.status NOT IN ('REJECTED','CANCELLED')" +
+                " ORDER BY COALESCE(wt.manager_approved_at, wt.submitted_at) DESC";
+        return jdbc.query(sql, WorkTaskRepository::map);
+    }
+
+    /**
+     * Paged, filterable REQUESTOR_QC_REVIEW tasks.
+     * Pass requestorId=-1 and isAdmin=true to get all tasks (admin view).
+     */
+    public PagedResponse<WorkTask> findRequestorQcReviewPaged(
+            int requestorId, boolean isAdmin,
+            String search, LocalDate dateFrom, LocalDate dateTo,
+            int page, int size) {
+
+        MapSqlParameterSource params = new MapSqlParameterSource();
+        List<String> conds = new ArrayList<>();
+        conds.add("wt.status = 'REQUESTOR_QC_REVIEW'");
+        conds.add("c.status NOT IN ('REJECTED','CANCELLED')");
+
+        if (!isAdmin) {
+            conds.add("c.requestor_id = :requestorId");
+            params.addValue("requestorId", requestorId);
+        }
+
+        if (hasValue(search)) {
+            conds.add("(wt.task_id LIKE :search"
+                    + " OR CAST(wt.campaign_id AS CHAR) LIKE :search"
+                    + " OR gt.task_name LIKE :search"
+                    + " OR tt.task_name LIKE :search"
+                    + " OR u.full_name LIKE :search"
+                    + " OR req.full_name LIKE :search)");
+            params.addValue("search", "%" + search.trim() + "%");
+        }
+        if (dateFrom != null) {
+            conds.add("wt.manager_approved_at >= :dateFrom");
+            params.addValue("dateFrom", dateFrom.atStartOfDay());
+        }
+        if (dateTo != null) {
+            conds.add("wt.manager_approved_at <= :dateTo");
+            params.addValue("dateTo", dateTo.atTime(23, 59, 59));
+        }
+
+        String where = " WHERE " + String.join(" AND ", conds);
+        Long total = jdbc.queryForObject(COUNT_BASE + where, params, Long.class);
+        if (total == null) total = 0L;
+
+        params.addValue("_size", size).addValue("_offset", (long) page * size);
+        List<WorkTask> content = jdbc.query(
+                SELECT_BASE + where
+                + " ORDER BY COALESCE(wt.manager_approved_at, wt.submitted_at) DESC,"
+                + " CAST(SUBSTRING(wt.task_id, 11) AS UNSIGNED) DESC"
+                + " LIMIT :_size OFFSET :_offset",
+                params, WorkTaskRepository::map);
+
+        return PagedResponse.of(content, total, page, size);
+    }
+
+    /**
+     * All tasks in REQUESTOR_QC_REVIEW for a given requestor's campaigns.
+     * Used by the requestor's QC review page.
+     */
+    public List<WorkTask> findRequestorQcReviewByRequestorId(int requestorId) {
+        String sql = SELECT_BASE +
+                " WHERE c.requestor_id = :requestorId AND wt.status = 'REQUESTOR_QC_REVIEW'" +
+                " AND c.status NOT IN ('REJECTED','CANCELLED')" +
+                " ORDER BY COALESCE(wt.manager_approved_at, wt.submitted_at) DESC";
         return jdbc.query(sql,
                 new MapSqlParameterSource("requestorId", requestorId),
                 WorkTaskRepository::map);
@@ -637,8 +735,20 @@ public class WorkTaskRepository {
     public List<WorkTask> findAllCompleted() {
         String sql = SELECT_BASE +
                 " WHERE wt.status = 'COMPLETED'" +
-                " ORDER BY wt.completed_at DESC";
+                " ORDER BY COALESCE(wt.requestor_approved_at, wt.manager_approved_at) DESC";
         return jdbc.query(sql, WorkTaskRepository::map);
+    }
+
+    /**
+     * Returns the most recently created work task for a given granular_task_id in a campaign.
+     * Used after followup-task routing to locate newly created work tasks for file linking.
+     */
+    public Optional<WorkTask> findLatestByGranularTaskIdAndCampaignId(String granularTaskId, int campaignId) {
+        List<WorkTask> rows = jdbc.query(
+                SELECT_BASE + " WHERE wt.campaign_id = :cId AND wt.granular_task_id = :gId ORDER BY wt.task_id DESC LIMIT 1",
+                new MapSqlParameterSource("cId", campaignId).addValue("gId", granularTaskId),
+                WorkTaskRepository::map);
+        return rows.isEmpty() ? Optional.empty() : Optional.of(rows.get(0));
     }
 
     /**
@@ -661,27 +771,23 @@ public class WorkTaskRepository {
 
     /**
      * Returns true if the campaign has at least one work task that has been started
-     * (i.e. status IN_PROGRESS, QC_REVIEW, REWORK, or COMPLETED).
+     * (i.e. status IN_PROGRESS, MANAGER_QC_REVIEW, REQUESTOR_QC_REVIEW, REWORK, or COMPLETED).
      * Used to guard against deleting a campaign whose work has already begun.
      */
     public boolean hasStartedTasksForCampaign(int campaignId) {
         Integer count = jdbc.queryForObject(
                 "SELECT COUNT(*) FROM work_tasks " +
                 "WHERE campaign_id = :cId " +
-                "  AND status IN ('IN_PROGRESS','QC_REVIEW','REWORK','COMPLETED')",
+                "  AND status IN ('IN_PROGRESS','MANAGER_QC_REVIEW','REQUESTOR_QC_REVIEW','REWORK','COMPLETED')",
                 new MapSqlParameterSource("cId", campaignId),
                 Integer.class);
         return count != null && count > 0;
     }
 
     public List<WorkTask> findPendingQcReview() {
-        // Exclude tasks whose parent campaign is already terminal — they
-        // shouldn't show up in the QC reviewer's queue. In normal flow this
-        // can't happen (campaign rejection cancels its tasks), but a stale
-        // tab or a partially-applied transaction could leave a QC_REVIEW row
-        // pointing at a REJECTED/COMPLETED campaign.
+        // Exclude tasks whose parent campaign is already terminal.
         return jdbc.query(
-                SELECT_BASE + " WHERE wt.status = 'QC_REVIEW' " +
+                SELECT_BASE + " WHERE wt.status = 'MANAGER_QC_REVIEW' " +
                 "  AND c.status NOT IN ('REJECTED','COMPLETED') " +
                 "ORDER BY wt.task_id",
                 WorkTaskRepository::map);
@@ -704,7 +810,7 @@ public class WorkTaskRepository {
         MapSqlParameterSource params = new MapSqlParameterSource();
         params.addValue("excludeUserId", excludeUserId);
         List<String> conds = new ArrayList<>();
-        conds.add("wt.status = 'QC_REVIEW'");
+        conds.add("wt.status = 'MANAGER_QC_REVIEW'");
         conds.add("c.status NOT IN ('REJECTED','COMPLETED')");
         conds.add("wt.assigned_to != :excludeUserId");
 
@@ -755,10 +861,37 @@ public class WorkTaskRepository {
      * campaign-level reject) must not block completion of an otherwise
      * approvable workflow.
      */
+    /**
+     * Counts tasks still waiting for work to be done (not yet in a terminal state or
+     * waiting for requestor QC sign-off). Used to decide whether the campaign can
+     * advance to REQUESTOR_QC_REVIEW once the manager finishes their last approval.
+     */
     public int countIncomplete(int campaignId) {
         Integer count = jdbc.queryForObject(
                 "SELECT COUNT(*) FROM work_tasks " +
+                " WHERE campaign_id = :cId AND status NOT IN ('COMPLETED','CANCELLED','REJECTED','REQUESTOR_QC_REVIEW')",
+                new MapSqlParameterSource("cId", campaignId),
+                Integer.class);
+        return count == null ? 0 : count;
+    }
+
+    /**
+     * Counts tasks still needing final requestor approval (REQUESTOR_QC_REVIEW).
+     * Returns 0 when all tasks are done (COMPLETED / CANCELLED / REJECTED).
+     */
+    public int countPendingRequestorApproval(int campaignId) {
+        Integer count = jdbc.queryForObject(
+                "SELECT COUNT(*) FROM work_tasks " +
                 " WHERE campaign_id = :cId AND status NOT IN ('COMPLETED','CANCELLED','REJECTED')",
+                new MapSqlParameterSource("cId", campaignId),
+                Integer.class);
+        return count == null ? 0 : count;
+    }
+
+    /** Returns how many COMPLETED tasks exist for this campaign. */
+    public int countCompleted(int campaignId) {
+        Integer count = jdbc.queryForObject(
+                "SELECT COUNT(*) FROM work_tasks WHERE campaign_id = :cId AND status = 'COMPLETED'",
                 new MapSqlParameterSource("cId", campaignId),
                 Integer.class);
         return count == null ? 0 : count;
@@ -786,15 +919,15 @@ public class WorkTaskRepository {
                 SELECT u.user_id,
                        u.full_name,
                        r.role_name,
-                       SUM(CASE WHEN wt.status IN ('ASSIGNED','IN_PROGRESS','REWORK','QC_REVIEW')
+                       SUM(CASE WHEN wt.status IN ('ASSIGNED','IN_PROGRESS','REWORK','MANAGER_QC_REVIEW')
                                 THEN 1 ELSE 0 END)                              AS current_active_tasks,
                        SUM(CASE WHEN wt.status NOT IN ('CANCELLED','REJECTED') THEN 1 ELSE 0 END) AS total_tasks,
                        SUM(CASE WHEN wt.status = 'COMPLETED' THEN 1 ELSE 0 END) AS completed_tasks,
                        SUM(CASE WHEN wt.status IN ('IN_PROGRESS','REWORK') THEN 1 ELSE 0 END) AS in_flight_tasks,
                        SUM(CASE WHEN wt.status IN ('CANCELLED','REJECTED') THEN 1 ELSE 0 END) AS cancelled_tasks,
                        COALESCE(SUM(CASE WHEN wt.status = 'COMPLETED'
-                                          AND (:from IS NULL OR wt.completed_at >= :from)
-                                          AND (:to   IS NULL OR wt.completed_at <= :to)
+                                          AND (:from IS NULL OR wt.requestor_approved_at >= :from)
+                                          AND (:to   IS NULL OR wt.requestor_approved_at <= :to)
                                          THEN wt.total_time_logged_minutes ELSE 0 END), 0) AS minutes_logged
                 FROM users u
                 LEFT JOIN user_roles ur ON ur.user_id = u.user_id
@@ -850,14 +983,15 @@ public class WorkTaskRepository {
                 new MapSqlParameterSource());
         result.put("tasksByStatus", taskByStatus);
 
-        // ── Weekly completed tasks — last 10 weeks ────────────────────────────
+        // ── Weekly completed tasks — all time ────────────────────────────────
         var weeklyCompleted = jdbc.queryForList(
                 """
-                SELECT DATE_FORMAT(completed_at,'%Y-W%u') AS week,
+                SELECT DATE_FORMAT(
+                         COALESCE(requestor_approved_at, manager_approved_at, updated_at, created_at),
+                         '%Y-W%u') AS week,
                        COUNT(*) AS cnt
                 FROM work_tasks
                 WHERE status = 'COMPLETED'
-                  AND completed_at >= DATE_SUB(NOW(), INTERVAL 10 WEEK)
                 GROUP BY week ORDER BY week
                 """,
                 new MapSqlParameterSource());
@@ -881,7 +1015,7 @@ public class WorkTaskRepository {
                 SELECT u.full_name                                              AS name,
                        SUM(CASE WHEN wt.status NOT IN ('CANCELLED','REJECTED') THEN 1 ELSE 0 END) AS total,
                        SUM(CASE WHEN wt.status = 'COMPLETED' THEN 1 ELSE 0 END) AS completed,
-                       SUM(CASE WHEN wt.status IN ('IN_PROGRESS','REWORK','QC_REVIEW','ASSIGNED') THEN 1 ELSE 0 END) AS active,
+                       SUM(CASE WHEN wt.status IN ('IN_PROGRESS','REWORK','MANAGER_QC_REVIEW','ASSIGNED') THEN 1 ELSE 0 END) AS active,
                        COALESCE(SUM(wt.total_time_logged_minutes),0)            AS minutesLogged,
                        COALESCE(SUM(
                            (SELECT COUNT(*) FROM approvals_log al
@@ -919,7 +1053,7 @@ public class WorkTaskRepository {
         Integer totalCampaigns  = jdbc.queryForObject("SELECT COUNT(*) FROM campaigns",    new MapSqlParameterSource(), Integer.class);
         Integer totalTasks      = jdbc.queryForObject("SELECT COUNT(*) FROM work_tasks WHERE status NOT IN ('CANCELLED','REJECTED')", new MapSqlParameterSource(), Integer.class);
         Integer completedTasks  = jdbc.queryForObject("SELECT COUNT(*) FROM work_tasks WHERE status = 'COMPLETED'",  new MapSqlParameterSource(), Integer.class);
-        Integer pendingQc       = jdbc.queryForObject("SELECT COUNT(*) FROM work_tasks WHERE status = 'QC_REVIEW'",  new MapSqlParameterSource(), Integer.class);
+        Integer pendingQc       = jdbc.queryForObject("SELECT COUNT(*) FROM work_tasks WHERE status = 'MANAGER_QC_REVIEW'",  new MapSqlParameterSource(), Integer.class);
         Integer inRework        = jdbc.queryForObject("SELECT COUNT(*) FROM work_tasks WHERE status = 'REWORK'",     new MapSqlParameterSource(), Integer.class);
         Double  avgMinutes      = jdbc.queryForObject(
                 "SELECT AVG(total_time_logged_minutes) FROM work_tasks WHERE status='COMPLETED' AND total_time_logged_minutes > 0",
@@ -971,7 +1105,7 @@ public class WorkTaskRepository {
 
     /**
      * Paginated + filtered COMPLETED tasks for a specific requestor.
-     * {@code dateFrom}/{@code dateTo} are matched against {@code wt.completed_at}.
+     * {@code dateFrom}/{@code dateTo} are matched against {@code wt.requestor_approved_at}.
      */
     public PagedResponse<WorkTask> findCompletedByRequestorIdPaged(
             int requestorId,
@@ -1008,11 +1142,11 @@ public class WorkTaskRepository {
             params.addValue("completedBy", "%" + completedBy.trim() + "%");
         }
         if (dateFrom != null) {
-            conds.add("wt.completed_at >= :completedFrom");
+            conds.add("wt.requestor_approved_at >= :completedFrom");
             params.addValue("completedFrom", dateFrom.atStartOfDay());
         }
         if (dateTo != null) {
-            conds.add("wt.completed_at <= :completedTo");
+            conds.add("wt.requestor_approved_at <= :completedTo");
             params.addValue("completedTo", dateTo.atTime(23, 59, 59));
         }
 
@@ -1023,7 +1157,7 @@ public class WorkTaskRepository {
 
         params.addValue("_size", size).addValue("_offset", (long) page * size);
         List<WorkTask> content = jdbc.query(
-                SELECT_BASE + where + " ORDER BY wt.completed_at DESC LIMIT :_size OFFSET :_offset",
+                SELECT_BASE + where + " ORDER BY COALESCE(wt.requestor_approved_at, wt.manager_approved_at) DESC LIMIT :_size OFFSET :_offset",
                 params, WorkTaskRepository::map);
 
         return PagedResponse.of(content, total, page, size);
@@ -1128,7 +1262,8 @@ public class WorkTaskRepository {
                 .acceptedAt(toLocalDateTime(rs, "accepted_at"))
                 .startedAt(toLocalDateTime(rs, "started_at"))
                 .submittedAt(toLocalDateTime(rs, "submitted_at"))
-                .completedAt(toLocalDateTime(rs, "completed_at"))
+                .managerApprovedAt(toLocalDateTime(rs, "manager_approved_at"))
+                .requestorApprovedAt(toLocalDateTime(rs, "requestor_approved_at"))
                 .totalTimeLoggedMinutes(getNullableInt(rs, "total_time_logged_minutes"))
                 .dynamicDeadline(toLocalDateTime(rs, "dynamic_deadline"))
                 .submissionNotes(rs.getString("submission_notes"))
@@ -1138,6 +1273,8 @@ public class WorkTaskRepository {
                 .requestorReworkCount(getNullableInt(rs, "requestor_rework_count"))
                 .latestManagerReworkComment(rs.getString("latest_manager_rework_comment"))
                 .latestRequestorReworkComment(rs.getString("latest_requestor_rework_comment"))
+                .latestReworkComment(rs.getString("latest_rework_comment"))
+                .latestReworkSource(rs.getString("latest_rework_source"))
                 .latestActionDoneByName(rs.getString("latest_action_done_by_name"))
                 .campaignDeadline(rs.getDate("campaign_deadline") == null ? null : rs.getDate("campaign_deadline").toLocalDate())
                 .campaignPriority(safeEnum(Priority.class, rs.getString("campaign_priority")))
