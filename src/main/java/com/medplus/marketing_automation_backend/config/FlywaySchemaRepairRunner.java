@@ -54,14 +54,12 @@ public class FlywaySchemaRepairRunner implements CommandLineRunner {
         ensureTimestampsOnTable("requirement_role_mapping");
         ensureMasterTableTimestamps();
 
-        // Ensure new tables introduced in V6 and V7 exist on every system.
-        // This is a safety net for environments where Flyway skipped those
-        // migrations (e.g. orphaned V3/V4 history entries caused ordering issues).
         purgeOrphanedFlywayEntries();
         ensureAutoCreatedTasksTable();
         ensureQcRoutingTable();
         ensureAutoContentGranularTask();
         ensureCampaignFilesWorkTaskIdColumn();
+        ensureNotificationTables();
     }
 
     private void repairFullWipe() {
@@ -302,17 +300,15 @@ public class FlywaySchemaRepairRunner implements CommandLineRunner {
 
     /**
      * Removes flyway_schema_history records whose migration FILES no longer exist
-     * on disk.  V3 and V4 were merged into V1; V5, V6, and V7 were also merged
-     * into V1 so their separate files have been deleted.  Keeping stale entries
-     * causes Flyway to flag subsequent migrations as "out of order" and skip them.
+     * on disk.  V5, V6, and V7 were merged into V1 so their separate files have
+     * been deleted.  V3 and V4 are live SQL files and must NOT be purged.
      */
     private void purgeOrphanedFlywayEntries() {
         try {
-            // V3, V4 – old collaboration migrations folded into V1.
-            // V5       – designations/regions timestamps folded into V1.
-            // V6       – auto_created_tasks folded into V1.
-            // V7       – qc_routing folded into V1.
-            String[] orphanedVersions = {"3", "4", "5", "6", "7"};
+            // V5 – designations/regions timestamps folded into V1.
+            // V6 – auto_created_tasks folded into V1.
+            // V7 – qc_routing folded into V1.
+            String[] orphanedVersions = {"5", "6", "7"};
             for (String v : orphanedVersions) {
                 int deleted = jdbc.update(
                     "DELETE FROM flyway_schema_history WHERE version = ?", v);
@@ -446,6 +442,104 @@ public class FlywaySchemaRepairRunner implements CommandLineRunner {
             }
         } catch (Exception e) {
             log.error("FlywaySchemaRepairRunner: ensureCampaignFilesWorkTaskIdColumn failed — {}", e.getMessage());
+        }
+    }
+
+    /**
+     * Safety net for the V4 notification system tables.
+     * Creates notification_event_types, notification_templates, and notifications
+     * if they do not exist, then seeds the default event types and templates.
+     * Idempotent — INSERT IGNORE and CREATE TABLE IF NOT EXISTS guard against duplicates.
+     */
+    private void ensureNotificationTables() {
+        try {
+            jdbc.execute(
+                "CREATE TABLE IF NOT EXISTS notification_event_types ("
+                + "  id          BIGINT       AUTO_INCREMENT PRIMARY KEY,"
+                + "  event_type  VARCHAR(100) NOT NULL UNIQUE,"
+                + "  description VARCHAR(500),"
+                + "  created_at  TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP"
+                + ") ENGINE=InnoDB");
+
+            jdbc.execute(
+                "CREATE TABLE IF NOT EXISTS notification_templates ("
+                + "  id               BIGINT        AUTO_INCREMENT PRIMARY KEY,"
+                + "  event_type       VARCHAR(100)  NOT NULL,"
+                + "  role_id          VARCHAR(20)   NULL,"
+                + "  message_template VARCHAR(1000) NOT NULL,"
+                + "  url_template     VARCHAR(500)  NOT NULL,"
+                + "  created_at       TIMESTAMP     NOT NULL DEFAULT CURRENT_TIMESTAMP,"
+                + "  updated_at       TIMESTAMP     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,"
+                + "  UNIQUE KEY uq_template_event_role (event_type, role_id)"
+                + ") ENGINE=InnoDB");
+
+            jdbc.execute(
+                "CREATE TABLE IF NOT EXISTS notifications ("
+                + "  id         BIGINT        AUTO_INCREMENT PRIMARY KEY,"
+                + "  user_id    BIGINT        NOT NULL,"
+                + "  event_type VARCHAR(100)  NOT NULL,"
+                + "  message    VARCHAR(1000) NOT NULL,"
+                + "  url        VARCHAR(500)  NOT NULL,"
+                + "  is_read    TINYINT(1)    NOT NULL DEFAULT 0,"
+                + "  created_at TIMESTAMP     NOT NULL DEFAULT CURRENT_TIMESTAMP,"
+                + "  INDEX idx_notifications_user        (user_id),"
+                + "  INDEX idx_notifications_user_unread (user_id, is_read)"
+                + ") ENGINE=InnoDB");
+
+            // Seed event types
+            String[] eventTypes = {
+                "TASK_ASSIGNED",          "Fired when a task is assigned to a user",
+                "ADDED_TO_COLLABORATION", "Fired when a user is added to a task collaboration",
+                "NEW_TASK_MESSAGE",       "Fired when a new chat message is posted in a collaboration",
+                "SUBMITTED_FOR_QC",       "Fired when a worker submits their task for QC review",
+                "MANAGER_QC_APPROVAL",    "Fired when a manager approves a task during QC",
+                "REQUESTOR_QC_APPROVAL",  "Fired when a requestor approves a completed task",
+                "TASK_HELD_BY_MANAGER",   "Fired when a manager places a task on hold",
+                "TASK_CANCELLED",         "Fired when a manager cancels an assigned task",
+                "CAMPAIGN_DELETED",       "Fired when a requestor deletes an entire campaign",
+                "COMMENT_ADDED",          "Fired when a worker adds a comment and self-holds their task",
+                "COMMENT_RESPONDED",      "Fired when a requestor/manager marks a worker comment as answered",
+                "MANAGER_REWORK",         "Fired when a manager sends a task back for rework",
+                "REQUESTOR_REWORK",       "Fired when a requestor sends a task back for rework",
+                "MANAGER_REJECT",            "Fired when a manager rejects a task during QC",
+                "CONTENT_TASK_SUBMITTED",    "Fired when a content writer submits their auto-generated content task",
+                "CONTENT_TASK_AUTO_CLOSED",  "Fired when a content task is auto-completed because the designer submitted for QC"
+            };
+            for (int i = 0; i < eventTypes.length; i += 2) {
+                jdbc.update(
+                    "INSERT IGNORE INTO notification_event_types (event_type, description) VALUES (?, ?)",
+                    eventTypes[i], eventTypes[i + 1]);
+            }
+
+            // Seed default templates (INSERT IGNORE — uq_template_event_role prevents dupes)
+            Object[][] templates = {
+                {"TASK_ASSIGNED",          null, "A new task {taskId} has been assigned to you",                                    "/my-tasks"},
+                {"ADDED_TO_COLLABORATION", null, "{inviterName} added you to collaboration on task {taskId}",                        "/collaborations?taskId={taskId}"},
+                {"NEW_TASK_MESSAGE",       null, "{senderName} sent a message in task {taskId}",                                     "/collaborations?taskId={taskId}"},
+                {"SUBMITTED_FOR_QC",       null, "{workerName} submitted task {taskId} for QC review",                              "/manager/qc-review"},
+                {"MANAGER_QC_APPROVAL",    null, "Manager approved your task {taskId}. Awaiting requestor sign-off.",               "/my-tasks"},
+                {"MANAGER_QC_APPROVAL",    "12", "Task {taskId} has passed manager QC and is ready for your review",                "/requestor-qc-review?taskId={taskId}"},
+                {"REQUESTOR_QC_APPROVAL",  null, "{requestorName} approved your task {taskId}",                                     "/my-tasks"},
+                {"TASK_HELD_BY_MANAGER",   null, "Manager {managerName} has held your task {taskId}",                              "/my-tasks"},
+                {"TASK_CANCELLED",         null, "Your task {taskId} has been cancelled by {managerName}",                         "/my-tasks"},
+                {"CAMPAIGN_DELETED",       null, "Campaign {campaignName} has been deleted. Your assigned task is no longer active.", "/my-tasks"},
+                {"COMMENT_ADDED",          null, "{workerName} added a comment on task {taskId} — please check it out",            "/campaigns"},
+                {"COMMENT_RESPONDED",      null, "{responderName} responded to your comment on task {taskId}",                     "/my-tasks"},
+                {"MANAGER_REWORK",         null, "Manager {managerName} has requested rework on your task {taskId}",               "/my-tasks"},
+                {"REQUESTOR_REWORK",       null, "{requestorName} has requested rework on your task {taskId}",                     "/my-tasks"},
+                {"MANAGER_REJECT",           null, "Manager {managerName} has rejected your task {taskId}",                                        "/my-tasks"},
+                {"CONTENT_TASK_SUBMITTED",   null, "{writerName} has completed the content writing task {taskId} — please review it",             "/my-tasks"},
+                {"CONTENT_TASK_AUTO_CLOSED", null, "Your content writing task {taskId} has been marked as complete (designer submitted for QC)",   "/my-tasks"}
+            };
+            for (Object[] t : templates) {
+                jdbc.update(
+                    "INSERT IGNORE INTO notification_templates (event_type, role_id, message_template, url_template) VALUES (?, ?, ?, ?)",
+                    t[0], t[1], t[2], t[3]);
+            }
+
+            log.info("FlywaySchemaRepairRunner: notification tables and seed data ensured.");
+        } catch (Exception e) {
+            log.error("FlywaySchemaRepairRunner: ensureNotificationTables failed — {}", e.getMessage());
         }
     }
 

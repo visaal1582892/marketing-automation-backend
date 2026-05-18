@@ -10,6 +10,7 @@ import com.medplus.marketing_automation_backend.dto.WorkTaskAnswerRequest;
 import com.medplus.marketing_automation_backend.dto.WorkTaskResponse;
 import com.medplus.marketing_automation_backend.enums.CampaignStatus;
 import com.medplus.marketing_automation_backend.enums.TaskStatus;
+import com.medplus.marketing_automation_backend.event.TaskAssignedEvent;
 import com.medplus.marketing_automation_backend.exception.InsufficientCapacityException;
 import com.medplus.marketing_automation_backend.repository.CampaignRepository;
 import com.medplus.marketing_automation_backend.repository.CollaboratorRepository;
@@ -17,6 +18,7 @@ import com.medplus.marketing_automation_backend.repository.RoutingConfigReposito
 import com.medplus.marketing_automation_backend.repository.UserRepository;
 import com.medplus.marketing_automation_backend.repository.WorkTaskRepository;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -48,19 +50,22 @@ public class RoutingEngineService {
     private final WorkTaskRepository      workTaskRepo;
     private final CollaboratorRepository  collaboratorRepo;
     private final QuestionnaireService    questionnaireService;
+    private final ApplicationEventPublisher eventPublisher;
 
     public RoutingEngineService(CampaignRepository campaignRepo,
                                 RoutingConfigRepository routingConfigRepo,
                                 UserRepository userRepo,
                                 WorkTaskRepository workTaskRepo,
                                 CollaboratorRepository collaboratorRepo,
-                                QuestionnaireService questionnaireService) {
+                                QuestionnaireService questionnaireService,
+                                ApplicationEventPublisher eventPublisher) {
         this.campaignRepo          = campaignRepo;
         this.routingConfigRepo     = routingConfigRepo;
         this.userRepo              = userRepo;
         this.workTaskRepo          = workTaskRepo;
         this.collaboratorRepo      = collaboratorRepo;
         this.questionnaireService  = questionnaireService;
+        this.eventPublisher        = eventPublisher;
     }
 
     // -------------------------------------------------------------------------
@@ -303,6 +308,8 @@ public class RoutingEngineService {
         userRepo.incrementActiveTasks(assignee.getUserId());
         log.info("ROUTING unhold complete | taskId={} newAssigneeId={} newAssigneeName={}",
                 task.getTaskId(), assignee.getUserId(), assignee.getFullName());
+        eventPublisher.publishEvent(new TaskAssignedEvent(
+                task.getTaskId(), assignee.getUserId().intValue(), task.getGranularTaskId()));
     }
 
     /**
@@ -374,6 +381,8 @@ public class RoutingEngineService {
             userRepo.incrementActiveTasks(autoAssignee.getUserId());
             log.info("ROUTING assignTask (AUTO-ASSIGNED) | campaignId={} granularTaskId={} assigneeId={}",
                     campaignId, granularTaskId, autoAssignee.getUserId());
+            eventPublisher.publishEvent(new TaskAssignedEvent(
+                    workTaskId, autoAssignee.getUserId().intValue(), granularTaskId));
         } else {
             log.info("ROUTING assignTask (HELD) | campaignId={} granularTaskId={}",
                     campaignId, granularTaskId);

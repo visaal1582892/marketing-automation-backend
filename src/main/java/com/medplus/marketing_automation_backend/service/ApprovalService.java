@@ -9,6 +9,11 @@ import com.medplus.marketing_automation_backend.dto.WorkTaskResponse;
 import com.medplus.marketing_automation_backend.enums.ApprovalAction;
 import com.medplus.marketing_automation_backend.enums.CampaignStatus;
 import com.medplus.marketing_automation_backend.enums.TaskStatus;
+import com.medplus.marketing_automation_backend.event.ManagerQcApprovedEvent;
+import com.medplus.marketing_automation_backend.event.RequestorQcApprovedEvent;
+import com.medplus.marketing_automation_backend.event.ManagerReworkEvent;
+import com.medplus.marketing_automation_backend.event.ManagerRejectEvent;
+import com.medplus.marketing_automation_backend.event.RequestorReworkEvent;
 import com.medplus.marketing_automation_backend.exception.BadRequestException;
 import com.medplus.marketing_automation_backend.exception.ResourceNotFoundException;
 import com.medplus.marketing_automation_backend.repository.ApprovalLogRepository;
@@ -16,6 +21,7 @@ import com.medplus.marketing_automation_backend.repository.CampaignRepository;
 import com.medplus.marketing_automation_backend.repository.UserRepository;
 import com.medplus.marketing_automation_backend.repository.WorkTaskRepository;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -26,19 +32,22 @@ import java.util.Map;
 @Service
 public class ApprovalService {
 
-    private final WorkTaskRepository    workTaskRepo;
-    private final ApprovalLogRepository approvalLogRepo;
-    private final CampaignRepository    campaignRepo;
-    private final UserRepository        userRepo;
+    private final WorkTaskRepository     workTaskRepo;
+    private final ApprovalLogRepository  approvalLogRepo;
+    private final CampaignRepository     campaignRepo;
+    private final UserRepository         userRepo;
+    private final ApplicationEventPublisher eventPublisher;
 
     public ApprovalService(WorkTaskRepository workTaskRepo,
                            ApprovalLogRepository approvalLogRepo,
                            CampaignRepository campaignRepo,
-                           UserRepository userRepo) {
+                           UserRepository userRepo,
+                           ApplicationEventPublisher eventPublisher) {
         this.workTaskRepo    = workTaskRepo;
         this.approvalLogRepo = approvalLogRepo;
         this.campaignRepo    = campaignRepo;
         this.userRepo        = userRepo;
+        this.eventPublisher  = eventPublisher;
     }
 
     // -------------------------------------------------------------------------
@@ -93,14 +102,19 @@ public class ApprovalService {
                 // Check if all tasks are now in a terminal/requestor-qc state
                 int stillActive = workTaskRepo.countIncomplete(task.getCampaignId());
                 if (stillActive == 0) {
-                    // All tasks are COMPLETED / CANCELLED / REJECTED / REQUESTOR_QC_REVIEW
-                    // Move campaign to REQUESTOR_QC_REVIEW so requestor sees it in their queue
                     campaignRepo.updateStatus(task.getCampaignId(), CampaignStatus.REQUESTOR_QC_REVIEW);
                     log.info("MANAGER QC APPROVED — campaign moved to REQUESTOR_QC_REVIEW | taskId={} campaignId={}",
                             taskId, task.getCampaignId());
                 } else {
                     log.info("MANAGER QC APPROVED | taskId={} campaignId={} remainingTasks={}",
                             taskId, task.getCampaignId(), stillActive);
+                }
+                // Notify worker and requestor
+                int workerId    = task.getAssignedTo() != null ? task.getAssignedTo() : -1;
+                int requestorId = task.getRequestorId() != null ? task.getRequestorId() : -1;
+                String managerName = reviewer.getFullName() != null ? reviewer.getFullName() : "Manager";
+                if (workerId > 0) {
+                    eventPublisher.publishEvent(new ManagerQcApprovedEvent(taskId, managerName, workerId, requestorId));
                 }
             }
             case NEEDS_REWORK -> {
@@ -113,6 +127,10 @@ public class ApprovalService {
                 workTaskRepo.activateCollaboration(taskId); // REWORK = task back to worker → re-activate
                 log.info("QC NEEDS_REWORK | taskId={} campaignId={} comment={}",
                         taskId, task.getCampaignId(), req.getComments());
+                if (task.getAssignedTo() != null) {
+                    String managerName = reviewer.getFullName() != null ? reviewer.getFullName() : "Manager";
+                    eventPublisher.publishEvent(new ManagerReworkEvent(taskId, managerName, task.getAssignedTo()));
+                }
             }
             case REJECTED -> {
                 workTaskRepo.markRejected(taskId);
@@ -126,6 +144,10 @@ public class ApprovalService {
                         "Rejected by reviewer: " + (req.getComments() != null ? req.getComments() : ""));
                 log.info("QC REJECTED — campaign rejected | taskId={} campaignId={} comment={}",
                         taskId, task.getCampaignId(), req.getComments());
+                if (task.getAssignedTo() != null) {
+                    String managerName = reviewer.getFullName() != null ? reviewer.getFullName() : "Manager";
+                    eventPublisher.publishEvent(new ManagerRejectEvent(taskId, managerName, task.getAssignedTo()));
+                }
             }
         }
 
@@ -201,6 +223,12 @@ public class ApprovalService {
         } else {
             log.info("REQUESTOR approved | taskId={} campaignId={} remainingPending={}",
                     taskId, task.getCampaignId(), remainingPending);
+        }
+
+        // Notify the task worker
+        if (task.getAssignedTo() != null && task.getAssignedTo() > 0) {
+            String requestorName = requestor.getFullName() != null ? requestor.getFullName() : "Requestor";
+            eventPublisher.publishEvent(new RequestorQcApprovedEvent(taskId, requestorName, task.getAssignedTo()));
         }
 
         return CampaignService.toWorkTaskResponse(
@@ -283,6 +311,10 @@ public class ApprovalService {
         // Re-increment the assignee's active-task counter (was decremented when manager approved).
         if (task.getAssignedTo() != null) {
             userRepo.incrementActiveTasks(task.getAssignedTo().longValue());
+        }
+        if (task.getAssignedTo() != null) {
+            String requestorName = requestor.getFullName() != null ? requestor.getFullName() : "Requestor";
+            eventPublisher.publishEvent(new RequestorReworkEvent(taskId, requestorName, task.getAssignedTo()));
         }
 
         // Re-open the campaign if it was in REQUESTOR_QC_REVIEW or already COMPLETED.

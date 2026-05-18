@@ -130,6 +130,7 @@ public class SecurityConfig {
                         // Everything else under /api/admin/** is Admin-only
                         .requestMatchers("/api/admin/**").hasRole("ADMIN")
                         .requestMatchers("/api/manager/**").hasAnyRole("ADMIN", "MARKETING_MANAGER", "PROCUREMENT_MANAGER")
+                        .requestMatchers("/api/notifications/**").authenticated()
                         .requestMatchers("/api/campaigns/**", "/api/tasks/**",
                                          "/api/collaborations/**", "/api/enums/**").authenticated()
                         .anyRequest().authenticated())

@@ -4,6 +4,7 @@ import com.medplus.marketing_automation_backend.domain.AssetInfo;
 import com.medplus.marketing_automation_backend.domain.TaskCollaborator;
 import com.medplus.marketing_automation_backend.domain.User;
 import com.medplus.marketing_automation_backend.domain.WorkTask;
+import com.medplus.marketing_automation_backend.event.CollaboratorAddedEvent;
 import com.medplus.marketing_automation_backend.dto.PagedResponse;
 import com.medplus.marketing_automation_backend.dto.WorkTaskResponse;
 import com.medplus.marketing_automation_backend.exception.BadRequestException;
@@ -13,6 +14,7 @@ import com.medplus.marketing_automation_backend.repository.AutoCreatedTaskReposi
 import com.medplus.marketing_automation_backend.repository.CollaboratorRepository;
 import com.medplus.marketing_automation_backend.repository.UserRepository;
 import com.medplus.marketing_automation_backend.repository.WorkTaskRepository;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -41,17 +43,20 @@ public class CollaborationService {
     private final AssetInfoRepository         assetInfoRepo;
     private final UserRepository              userRepo;
     private final AutoCreatedTaskRepository   autoCreatedTaskRepo;
+    private final ApplicationEventPublisher   eventPublisher;
 
     public CollaborationService(CollaboratorRepository collaboratorRepo,
                                 WorkTaskRepository workTaskRepo,
                                 AssetInfoRepository assetInfoRepo,
                                 UserRepository userRepo,
-                                AutoCreatedTaskRepository autoCreatedTaskRepo) {
+                                AutoCreatedTaskRepository autoCreatedTaskRepo,
+                                ApplicationEventPublisher eventPublisher) {
         this.collaboratorRepo    = collaboratorRepo;
         this.workTaskRepo        = workTaskRepo;
         this.assetInfoRepo       = assetInfoRepo;
         this.userRepo            = userRepo;
         this.autoCreatedTaskRepo = autoCreatedTaskRepo;
+        this.eventPublisher      = eventPublisher;
     }
 
     /**
@@ -78,6 +83,10 @@ public class CollaborationService {
             throw new BadRequestException("Cannot add yourself as a collaborator.");
         }
         collaboratorRepo.addCollaborators(taskId, filtered);
+        String inviterName = userRepo.findById((long) callerUserId)
+                .map(u -> u.getFullName() != null ? u.getFullName() : "Someone")
+                .orElse("Someone");
+        eventPublisher.publishEvent(new CollaboratorAddedEvent(taskId, filtered, inviterName));
         return collaboratorRepo.findByTaskId(taskId);
     }
 

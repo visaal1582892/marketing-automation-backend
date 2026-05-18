@@ -374,6 +374,12 @@ public class CollaboratorRepository {
     }
 
     /** Add a single collaborator (idempotent — uses INSERT IGNORE). */
+    /** Returns the user_id list of all collaborators on a task — lightweight for notification fan-out. */
+    public List<Integer> findUserIdsByTaskId(String taskId) {
+        String sql = "SELECT user_id FROM task_collaborators WHERE task_id = :taskId";
+        return jdbc.query(sql, Map.of("taskId", taskId), (rs, rn) -> rs.getInt("user_id"));
+    }
+
     public void addSingleCollaborator(String taskId, int userId) {
         jdbc.update("""
                 INSERT IGNORE INTO task_collaborators (task_id, user_id)

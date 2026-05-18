@@ -3,9 +3,12 @@ package com.medplus.marketing_automation_backend.service;
 import com.medplus.marketing_automation_backend.domain.TaskMessage;
 import com.medplus.marketing_automation_backend.domain.WorkTask;
 import com.medplus.marketing_automation_backend.enums.TaskStatus;
+import com.medplus.marketing_automation_backend.event.NewTaskMessageEvent;
 import com.medplus.marketing_automation_backend.exception.BadRequestException;
 import com.medplus.marketing_automation_backend.repository.TaskMessageRepository;
+import com.medplus.marketing_automation_backend.repository.UserRepository;
 import com.medplus.marketing_automation_backend.repository.WorkTaskRepository;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -14,16 +17,22 @@ import java.util.List;
 @Service
 public class TaskMessageService {
 
-    private final TaskMessageRepository messageRepo;
-    private final CollaborationService  collaborationService;
-    private final WorkTaskRepository    workTaskRepo;
+    private final TaskMessageRepository  messageRepo;
+    private final CollaborationService   collaborationService;
+    private final WorkTaskRepository     workTaskRepo;
+    private final UserRepository         userRepo;
+    private final ApplicationEventPublisher eventPublisher;
 
     public TaskMessageService(TaskMessageRepository messageRepo,
                               CollaborationService collaborationService,
-                              WorkTaskRepository workTaskRepo) {
+                              WorkTaskRepository workTaskRepo,
+                              UserRepository userRepo,
+                              ApplicationEventPublisher eventPublisher) {
         this.messageRepo          = messageRepo;
         this.collaborationService = collaborationService;
         this.workTaskRepo         = workTaskRepo;
+        this.userRepo             = userRepo;
+        this.eventPublisher       = eventPublisher;
     }
 
     /**
@@ -41,7 +50,12 @@ public class TaskMessageService {
         if (text == null || text.isBlank()) {
             throw new BadRequestException("Message must not be blank.");
         }
-        return messageRepo.insert(taskId, userId, text.trim());
+        TaskMessage saved = messageRepo.insert(taskId, userId, text.trim());
+        String senderName = userRepo.findById((long) userId)
+                .map(u -> u.getFullName() != null ? u.getFullName() : "Someone")
+                .orElse("Someone");
+        eventPublisher.publishEvent(new NewTaskMessageEvent(taskId, userId, senderName));
+        return saved;
     }
 
     /**

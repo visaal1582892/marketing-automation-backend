@@ -5,6 +5,12 @@ import com.medplus.marketing_automation_backend.dto.PagedResponse;
 import com.medplus.marketing_automation_backend.dto.WorkTaskResponse;
 import com.medplus.marketing_automation_backend.enums.CampaignStatus;
 import com.medplus.marketing_automation_backend.enums.TaskStatus;
+import com.medplus.marketing_automation_backend.event.TaskSubmittedForQcEvent;
+import com.medplus.marketing_automation_backend.event.CommentAddedEvent;
+import com.medplus.marketing_automation_backend.event.CommentRespondedEvent;
+import com.medplus.marketing_automation_backend.event.ContentTaskSubmittedEvent;
+import com.medplus.marketing_automation_backend.domain.Campaign;
+import com.medplus.marketing_automation_backend.domain.User;
 import com.medplus.marketing_automation_backend.exception.BadRequestException;
 import com.medplus.marketing_automation_backend.exception.ResourceNotFoundException;
 import com.medplus.marketing_automation_backend.domain.ApprovalLog;
@@ -15,6 +21,7 @@ import com.medplus.marketing_automation_backend.repository.CampaignRepository;
 import com.medplus.marketing_automation_backend.repository.UserRepository;
 import com.medplus.marketing_automation_backend.repository.WorkTaskRepository;
 import com.medplus.marketing_automation_backend.repository.WorkerCommentRepository;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -36,6 +43,7 @@ public class WorkTaskService {
     private final UserRepository          userRepo;
     private final CollaborationService    collaborationService;
     private final CampaignRepository      campaignRepo;
+    private final ApplicationEventPublisher eventPublisher;
 
     public WorkTaskService(WorkTaskRepository workTaskRepo,
                            WorkerCommentRepository workerCommentRepo,
@@ -43,7 +51,8 @@ public class WorkTaskService {
                            AutoCreatedTaskService autoCreatedTaskService,
                            UserRepository userRepo,
                            CollaborationService collaborationService,
-                           CampaignRepository campaignRepo) {
+                           CampaignRepository campaignRepo,
+                           ApplicationEventPublisher eventPublisher) {
         this.workTaskRepo          = workTaskRepo;
         this.workerCommentRepo     = workerCommentRepo;
         this.approvalLogRepo       = approvalLogRepo;
@@ -51,6 +60,7 @@ public class WorkTaskService {
         this.userRepo              = userRepo;
         this.collaborationService  = collaborationService;
         this.campaignRepo          = campaignRepo;
+        this.eventPublisher        = eventPublisher;
     }
 
     // -------------------------------------------------------------------------
@@ -163,6 +173,13 @@ public class WorkTaskService {
             autoCreatedTaskService.markCompleted(taskId);
             userRepo.decrementActiveTasks((long) userId);
             workTaskRepo.deactivateCollaboration(taskId);
+            // Notify the designer who requested this content task
+            autoCreatedTaskService.findRequesterByContentTaskId(taskId).ifPresent(designerId -> {
+                String writerName = userRepo.findById((long) userId)
+                        .map(u -> u.getFullName() != null ? u.getFullName() : "Content Writer")
+                        .orElse("Content Writer");
+                eventPublisher.publishEvent(new ContentTaskSubmittedEvent(taskId, writerName, designerId));
+            });
         } else {
             updated = workTaskRepo.complete(taskId, userId, now, totalMinutes, trim(submissionNotes));
             if (updated == 0) {
@@ -173,6 +190,11 @@ public class WorkTaskService {
             // Close any linked auto-generated content task — the designer has
             // finished and no further content support is needed.
             autoCreatedTaskService.closeLinkedContentTaskOnSourceQcSubmit(taskId);
+            // Notify managers that a task was submitted for QC
+            String workerName = userRepo.findById((long) userId)
+                    .map(u -> u.getFullName() != null ? u.getFullName() : "Someone")
+                    .orElse("Someone");
+            eventPublisher.publishEvent(new TaskSubmittedForQcEvent(taskId, userId, workerName));
         }
         return autoCreatedTaskService.enrich(CampaignService.toWorkTaskResponse(
                 workTaskRepo.findById(taskId).orElseThrow()));
@@ -190,6 +212,8 @@ public class WorkTaskService {
             throw new BadRequestException("Comment must not be blank.");
         }
         // First insert the comment, then flip the task to HELD
+        WorkTask task = workTaskRepo.findById(taskId).orElseThrow(() ->
+                new BadRequestException("Task not found: " + taskId));
         workerCommentRepo.insert(taskId, userId, trim(comment));
         int updated = workTaskRepo.holdTask(taskId, userId);
         if (updated == 0) {
@@ -201,6 +225,15 @@ public class WorkTaskService {
                 .actionTaken(ApprovalAction.HELD).comments(comment).build());
         // Rule 4: task is now HELD — deactivate collaboration
         workTaskRepo.deactivateCollaboration(taskId);
+        // Notify the campaign requestor that a comment was added
+        if (task.getCampaignId() != null) {
+            Campaign campaign = campaignRepo.findById(task.getCampaignId()).orElse(null);
+            if (campaign != null && campaign.getRequestorId() != null) {
+                User worker = userRepo.findById((long) userId).orElse(null);
+                String workerName = worker != null && worker.getFullName() != null ? worker.getFullName() : "Worker";
+                eventPublisher.publishEvent(new CommentAddedEvent(taskId, workerName, campaign.getRequestorId()));
+            }
+        }
         return CampaignService.toWorkTaskResponse(
                 workTaskRepo.findById(taskId).orElseThrow());
     }
@@ -232,8 +265,15 @@ public class WorkTaskService {
 
     /** Mark a single worker comment as answered. Any participant can do this. */
     @Transactional
-    public void markCommentAnswered(String taskId, int commentId) {
+    public void markCommentAnswered(String taskId, int commentId, int actorUserId) {
         workerCommentRepo.markAnswered(commentId);
+        // Notify the task assignee that their comment was addressed
+        WorkTask task = workTaskRepo.findById(taskId).orElse(null);
+        if (task != null && task.getAssignedTo() != null && task.getAssignedTo() != actorUserId) {
+            User actor = userRepo.findById((long) actorUserId).orElse(null);
+            String responderName = actor != null && actor.getFullName() != null ? actor.getFullName() : "Requestor";
+            eventPublisher.publishEvent(new CommentRespondedEvent(taskId, responderName, task.getAssignedTo()));
+        }
     }
 
     private static String trim(String s) {

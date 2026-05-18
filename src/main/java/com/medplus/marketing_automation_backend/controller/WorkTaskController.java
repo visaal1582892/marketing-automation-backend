@@ -118,7 +118,7 @@ public class WorkTaskController {
     public void markCommentAnswered(@PathVariable String id,
                                     @PathVariable int commentId,
                                     @AuthenticationPrincipal CustomUserDetails principal) {
-        workTaskService.markCommentAnswered(id, commentId);
+        workTaskService.markCommentAnswered(id, commentId, principal.getUser().getUserId().intValue());
     }
 
     /**

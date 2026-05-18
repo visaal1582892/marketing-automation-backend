@@ -13,7 +13,13 @@ import com.medplus.marketing_automation_backend.exception.BadRequestException;
 import com.medplus.marketing_automation_backend.exception.ResourceNotFoundException;
 import com.medplus.marketing_automation_backend.domain.ApprovalLog;
 import com.medplus.marketing_automation_backend.enums.ApprovalAction;
+import com.medplus.marketing_automation_backend.event.TaskAssignedEvent;
+import com.medplus.marketing_automation_backend.event.TaskHeldByManagerEvent;
+import com.medplus.marketing_automation_backend.event.TaskCancelledEvent;
+import com.medplus.marketing_automation_backend.event.CampaignDeletedEvent;
+import com.medplus.marketing_automation_backend.event.CommentRespondedEvent;
 import com.medplus.marketing_automation_backend.repository.ApprovalLogRepository;
+import org.springframework.context.ApplicationEventPublisher;
 import com.medplus.marketing_automation_backend.repository.AutoCreatedTaskRepository;
 import com.medplus.marketing_automation_backend.repository.CampaignBookmarkRepository;
 import com.medplus.marketing_automation_backend.repository.CampaignRepository;
@@ -48,6 +54,7 @@ public class CampaignService {
     private final ApprovalLogRepository      approvalLogRepo;
     private final AutoCreatedTaskRepository  autoCreatedTaskRepo;
     private final AutoCreatedTaskService     autoCreatedTaskService;
+    private final ApplicationEventPublisher  eventPublisher;
 
     public CampaignService(CampaignRepository campaignRepo,
                            WorkTaskRepository workTaskRepo,
@@ -59,7 +66,8 @@ public class CampaignService {
                            WorkerCommentRepository workerCommentRepo,
                            ApprovalLogRepository approvalLogRepo,
                            AutoCreatedTaskRepository autoCreatedTaskRepo,
-                           AutoCreatedTaskService autoCreatedTaskService) {
+                           AutoCreatedTaskService autoCreatedTaskService,
+                           ApplicationEventPublisher eventPublisher) {
         this.campaignRepo          = campaignRepo;
         this.workTaskRepo          = workTaskRepo;
         this.userRepo              = userRepo;
@@ -71,6 +79,7 @@ public class CampaignService {
         this.approvalLogRepo       = approvalLogRepo;
         this.autoCreatedTaskRepo   = autoCreatedTaskRepo;
         this.autoCreatedTaskService = autoCreatedTaskService;
+        this.eventPublisher        = eventPublisher;
     }
 
     // -------------------------------------------------------------------------
@@ -154,7 +163,7 @@ public class CampaignService {
                 }
             }
         }
-        routingEngine.route(campaignId, qa);
+        routingEngine.route(campaignId, qa, true);
 
         log.info("CAMPAIGN created successfully | campaignId={} requestorId={}",
                 campaignId, requestor.getUserId());
@@ -352,7 +361,7 @@ public class CampaignService {
         }
 
         // Route only the newly added (unrouted) deliverables
-        routingEngine.route(campaignId, qa);
+        routingEngine.route(campaignId, qa, true);
 
         return getDetail(campaignId);
     }
@@ -497,7 +506,7 @@ public class CampaignService {
                 }
                 validSpecs.add(spec);
             }
-            routingEngine.route(campaignId, qa);
+            routingEngine.route(campaignId, qa, true);
             // Link per-task reference files to newly created work tasks
             for (TaskSpecRequest spec : validSpecs) {
                 List<String> fileUrls = spec.getFileUrls();
@@ -542,11 +551,18 @@ public class CampaignService {
 
         // The requestor's edit implicitly acknowledges any worker hold comments.
         // Restore all HELD tasks to their pre-hold status and mark comments answered.
+        String requestorDisplayName = userRepo.findById((long) requestorId)
+                .map(u -> u.getFullName() != null ? u.getFullName() : "Requestor")
+                .orElse("Requestor");
         workTaskRepo.findByCampaignId(campaignId).stream()
                 .filter(wt -> wt.getStatus() == TaskStatus.HELD)
                 .forEach(wt -> {
                     workerCommentRepo.markAllAnswered(wt.getTaskId());
                     workTaskRepo.clearHoldByTaskId(wt.getTaskId());
+                    if (wt.getAssignedTo() != null) {
+                        eventPublisher.publishEvent(
+                                new CommentRespondedEvent(wt.getTaskId(), requestorDisplayName, wt.getAssignedTo()));
+                    }
                 });
 
         return getDetail(campaignId);
@@ -684,6 +700,11 @@ public class CampaignService {
                 .taskId(taskId).reviewerId(actorId)
                 .actionTaken(ApprovalAction.HELD).build());
         log.info("TASK held | taskId={} previousAssignee={}", taskId, task.getAssignedTo());
+        if (task.getAssignedTo() != null) {
+            User actor = userRepo.findById((long) actorId).orElse(null);
+            String managerName = actor != null && actor.getFullName() != null ? actor.getFullName() : "Manager";
+            eventPublisher.publishEvent(new TaskHeldByManagerEvent(taskId, managerName, task.getAssignedTo()));
+        }
         return toWorkTaskResponse(workTaskRepo.findById(taskId).orElseThrow());
     }
 
@@ -731,6 +752,9 @@ public class CampaignService {
                 taskId, s, task.getAssignedTo());
         if (task.getAssignedTo() != null && (s == TaskStatus.ASSIGNED || s == TaskStatus.REWORK)) {
             userRepo.decrementActiveTasks(task.getAssignedTo().longValue());
+        }
+        if (task.getAssignedTo() != null) {
+            eventPublisher.publishEvent(new TaskCancelledEvent(taskId, "Manager", task.getAssignedTo()));
         }
         // Auto-cancel the campaign when all its tasks are now terminal.
         // Wrapped in its own try-catch so a schema mismatch (V4 migration not
@@ -802,7 +826,10 @@ public class CampaignService {
                 .actionTaken(ApprovalAction.UNHOLD).build());
         log.info("TASK manually assigned | taskId={} assigneeId={} assigneeName={}",
                 taskId, assignee.getUserId(), assignee.getFullName());
-        return toWorkTaskResponse(workTaskRepo.findById(taskId).orElseThrow());
+        WorkTask updated2 = workTaskRepo.findById(taskId).orElseThrow();
+        eventPublisher.publishEvent(new TaskAssignedEvent(
+                taskId, assignee.getUserId().intValue(), updated2.getGranularTaskId()));
+        return toWorkTaskResponse(updated2);
     }
 
     // -------------------------------------------------------------------------
@@ -888,14 +915,25 @@ public class CampaignService {
                     "Cannot delete campaign — one or more tasks have already been started.");
         }
         // Restore capacity for any ASSIGNED/ACCEPTED tasks before deleting
-        workTaskRepo.findByCampaignId(campaignId).forEach(wt -> {
+        List<WorkTask> tasksToDelete = workTaskRepo.findByCampaignId(campaignId);
+        List<Integer> assignedUserIds = tasksToDelete.stream()
+                .filter(wt -> wt.getAssignedTo() != null)
+                .map(WorkTask::getAssignedTo)
+                .distinct()
+                .collect(java.util.stream.Collectors.toList());
+        tasksToDelete.forEach(wt -> {
             if ((wt.getStatus() == TaskStatus.ASSIGNED || wt.getStatus() == TaskStatus.ACCEPTED)
                     && wt.getAssignedTo() != null) {
                 userRepo.decrementActiveTasks(wt.getAssignedTo().longValue());
             }
         });
+        String campaignName = "Campaign #" + campaignId
+                + (campaign.getBusinessObjective() != null ? " (" + campaign.getBusinessObjective() + ")" : "");
         campaignRepo.delete(campaignId);
         log.info("CAMPAIGN deleted | campaignId={}", campaignId);
+        if (!assignedUserIds.isEmpty()) {
+            eventPublisher.publishEvent(new CampaignDeletedEvent(campaignId, campaignName, assignedUserIds));
+        }
     }
 
     // -------------------------------------------------------------------------
