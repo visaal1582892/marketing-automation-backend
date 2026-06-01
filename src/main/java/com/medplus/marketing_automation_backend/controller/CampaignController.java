@@ -78,10 +78,10 @@ public class CampaignController {
             @RequestParam(defaultValue = "0")  int page,
             @RequestParam(defaultValue = "20") int size) {
         int requestorId = principal.getUser().getUserId().intValue();
-        boolean isAdmin = principal.getUser().hasRole("Admin");
         LocalDate from = dateFrom != null ? LocalDate.parse(dateFrom) : null;
         LocalDate to   = dateTo   != null ? LocalDate.parse(dateTo)   : null;
-        return campaignService.listRequestorQcTasks(requestorId, isAdmin, search, from, to, page, size);
+        // Always filter by caller's requestor_id — admin sees only their own campaigns' QC tasks
+        return campaignService.listRequestorQcTasks(requestorId, false, search, from, to, page, size);
     }
 
     /**
@@ -188,16 +188,21 @@ public class CampaignController {
     }
 
     /**
-     * Deletes a single task spec from a campaign.
-     * Only the campaign requestor may call this, and only for tasks that have
-     * not yet been started (status ASSIGNED, HELD, or ACCEPTED).
+     * Deletes a single work task from a campaign.
+     * The campaign requestor or a manager/admin may call this.
+     * Deletion is blocked when the task has already been started
+     * (IN_PROGRESS, REWORK, MANAGER_QC_REVIEW, COMPLETED).
      */
-    @DeleteMapping("/{id}/deliverables/{specId}")
+    @DeleteMapping("/{id}/tasks/{taskId}")
     @PreAuthorize("hasAnyRole('ADMIN','REQUESTOR','MARKETING_MANAGER','HEAD','REGIONAL_MANAGER')")
     public ResponseEntity<Void> deleteTask(@PathVariable int id,
-                                           @PathVariable int specId,
+                                           @PathVariable String taskId,
                                            @AuthenticationPrincipal CustomUserDetails principal) {
-        campaignService.requestorDeleteTask(id, specId, principal.getUser().getUserId().intValue());
+        boolean isManager = principal.getAuthorities().stream()
+                .anyMatch(a -> a.getAuthority().matches(
+                        "ROLE_ADMIN|ROLE_MARKETING_MANAGER|ROLE_HEAD|ROLE_REGIONAL_MANAGER"));
+        campaignService.requestorDeleteTask(id, taskId,
+                principal.getUser().getUserId().intValue(), isManager);
         return ResponseEntity.noContent().build();
     }
 

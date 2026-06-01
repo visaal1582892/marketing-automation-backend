@@ -1,7 +1,6 @@
 package com.medplus.marketing_automation_backend.service;
 
 import com.medplus.marketing_automation_backend.domain.Campaign;
-import com.medplus.marketing_automation_backend.domain.CampaignDeliverable;
 import com.medplus.marketing_automation_backend.domain.User;
 import com.medplus.marketing_automation_backend.domain.WorkTask;
 import com.medplus.marketing_automation_backend.dto.*;
@@ -55,6 +54,7 @@ public class CampaignService {
     private final AutoCreatedTaskRepository  autoCreatedTaskRepo;
     private final AutoCreatedTaskService     autoCreatedTaskService;
     private final ApplicationEventPublisher  eventPublisher;
+    private final NotificationService        notificationService;
 
     public CampaignService(CampaignRepository campaignRepo,
                            WorkTaskRepository workTaskRepo,
@@ -67,19 +67,21 @@ public class CampaignService {
                            ApprovalLogRepository approvalLogRepo,
                            AutoCreatedTaskRepository autoCreatedTaskRepo,
                            AutoCreatedTaskService autoCreatedTaskService,
-                           ApplicationEventPublisher eventPublisher) {
-        this.campaignRepo          = campaignRepo;
-        this.workTaskRepo          = workTaskRepo;
-        this.userRepo              = userRepo;
-        this.routingEngine         = routingEngine;
-        this.questionnaireService  = questionnaireService;
-        this.masterDataService     = masterDataService;
-        this.bookmarkRepo          = bookmarkRepo;
-        this.workerCommentRepo     = workerCommentRepo;
-        this.approvalLogRepo       = approvalLogRepo;
-        this.autoCreatedTaskRepo   = autoCreatedTaskRepo;
-        this.autoCreatedTaskService = autoCreatedTaskService;
-        this.eventPublisher        = eventPublisher;
+                           ApplicationEventPublisher eventPublisher,
+                           NotificationService notificationService) {
+        this.campaignRepo           = campaignRepo;
+        this.workTaskRepo           = workTaskRepo;
+        this.userRepo               = userRepo;
+        this.routingEngine          = routingEngine;
+        this.questionnaireService   = questionnaireService;
+        this.masterDataService      = masterDataService;
+        this.bookmarkRepo           = bookmarkRepo;
+        this.workerCommentRepo      = workerCommentRepo;
+        this.approvalLogRepo        = approvalLogRepo;
+        this.autoCreatedTaskRepo    = autoCreatedTaskRepo;
+        this.autoCreatedTaskService  = autoCreatedTaskService;
+        this.eventPublisher         = eventPublisher;
+        this.notificationService    = notificationService;
     }
 
     // -------------------------------------------------------------------------
@@ -99,7 +101,12 @@ public class CampaignService {
                 .departmentId(req.getDepartmentId())
                 .targetLocation(req.getTargetLocation())
                 .businessObjective(req.getBusinessObjective())
-                .taskTypeId(masterDataService.toJsonArray(req.getTaskTypeId()))
+                .campaignTypeId(req.getCampaignTypeId())
+                .businessVerticalId(req.getBusinessVerticalId())
+                .businessTypeId(req.getBusinessTypeId())
+                .storeFormatTypeId(req.getStoreFormatTypeId())
+                .storeId(req.getStoreId())
+                .contactNumber(req.getContactNumber())
                 .audienceTypeId(masterDataService.toJsonArray(req.getAudienceTypeId()))
                 .language(masterDataService.toJsonArray(req.getLanguage()))
                 .hasOffer(req.getHasOffer())
@@ -127,15 +134,6 @@ public class CampaignService {
         Integer campaignId = campaignRepo.insert(campaign);
         log.debug("CAMPAIGN inserted | campaignId={}", campaignId);
 
-        // Save per-task deliverable specs
-        if (req.getTaskSpecs() != null) {
-            for (TaskSpecRequest spec : req.getTaskSpecs()) {
-                if (spec.getGranularTaskId() != null) {
-                    campaignRepo.insertDeliverable(campaignId, spec.getGranularTaskId());
-                }
-            }
-        }
-
         // Save campaign-level supporting files
         if (req.getFileUrls() != null) {
             List<String> origNames = req.getFileOriginalNames();
@@ -153,17 +151,19 @@ public class CampaignService {
         // Auto-route directly to workers — no approval steps required.
         // If team capacity is full, InsufficientCapacityException is thrown
         // and the whole transaction rolls back (campaign is not created).
+        List<String> newGranularTaskIds = new java.util.ArrayList<>();
         Map<String, List<WorkTaskAnswerRequest.AnswerItem>> qa = new LinkedHashMap<>();
         if (req.getTaskSpecs() != null) {
             for (TaskSpecRequest spec : req.getTaskSpecs()) {
-                if (spec.getGranularTaskId() != null
-                        && spec.getQuestionnaireAnswers() != null
-                        && !spec.getQuestionnaireAnswers().isEmpty()) {
-                    qa.put(spec.getGranularTaskId(), spec.getQuestionnaireAnswers());
+                if (spec.getGranularTaskId() != null) {
+                    newGranularTaskIds.add(spec.getGranularTaskId());
+                    if (spec.getQuestionnaireAnswers() != null && !spec.getQuestionnaireAnswers().isEmpty()) {
+                        qa.put(spec.getGranularTaskId(), spec.getQuestionnaireAnswers());
+                    }
                 }
             }
         }
-        routingEngine.route(campaignId, qa, true);
+        routingEngine.route(campaignId, newGranularTaskIds, qa, true);
 
         log.info("CAMPAIGN created successfully | campaignId={} requestorId={}",
                 campaignId, requestor.getUserId());
@@ -351,17 +351,18 @@ public class CampaignService {
             throw new BadRequestException("At least one task must be selected.");
         }
 
+        List<String> newGranularTaskIds = new java.util.ArrayList<>();
         Map<String, List<WorkTaskAnswerRequest.AnswerItem>> qa = new LinkedHashMap<>();
         for (TaskSpecRequest spec : specs) {
             if (spec.getGranularTaskId() == null || spec.getGranularTaskId().isBlank()) continue;
-            campaignRepo.insertDeliverable(campaignId, spec.getGranularTaskId());
+            newGranularTaskIds.add(spec.getGranularTaskId());
             if (spec.getQuestionnaireAnswers() != null && !spec.getQuestionnaireAnswers().isEmpty()) {
                 qa.put(spec.getGranularTaskId(), spec.getQuestionnaireAnswers());
             }
         }
 
-        // Route only the newly added (unrouted) deliverables
-        routingEngine.route(campaignId, qa, true);
+        // Route only the newly added tasks
+        routingEngine.route(campaignId, newGranularTaskIds, qa, true);
 
         return getDetail(campaignId);
     }
@@ -392,11 +393,12 @@ public class CampaignService {
             throw new BadRequestException("At least one task must be selected.");
         }
 
+        List<String> newGranularTaskIds = new java.util.ArrayList<>();
         Map<String, List<WorkTaskAnswerRequest.AnswerItem>> qa = new LinkedHashMap<>();
         List<TaskSpecRequest> validSpecs = new java.util.ArrayList<>();
         for (TaskSpecRequest spec : req.getSpecs()) {
             if (spec.getGranularTaskId() == null || spec.getGranularTaskId().isBlank()) continue;
-            campaignRepo.insertDeliverable(campaignId, spec.getGranularTaskId());
+            newGranularTaskIds.add(spec.getGranularTaskId());
             if (spec.getQuestionnaireAnswers() != null && !spec.getQuestionnaireAnswers().isEmpty()) {
                 qa.put(spec.getGranularTaskId(), spec.getQuestionnaireAnswers());
             }
@@ -404,7 +406,7 @@ public class CampaignService {
         }
 
         // Route newly added tasks; auto-assign non-OTHER tasks immediately.
-        routingEngine.route(campaignId, qa, true);
+        routingEngine.route(campaignId, newGranularTaskIds, qa, true);
 
         // Link per-task reference files to the newly created work tasks
         for (TaskSpecRequest spec : validSpecs) {
@@ -459,8 +461,6 @@ public class CampaignService {
         String newDeptId          = req.getDepartmentId()       != null ? req.getDepartmentId()       : c.getDepartmentId();
         String newTargetLocation  = req.getTargetLocation()     != null ? req.getTargetLocation()     : c.getTargetLocation();
         String newBizObjective    = req.getBusinessObjective()  != null ? req.getBusinessObjective()  : c.getBusinessObjective();
-        String newTaskTypeId      = req.getTaskTypeId()         != null
-                ? masterDataService.toJsonArray(req.getTaskTypeId()) : c.getTaskTypeId();
         String newAudienceTypeId  = req.getAudienceTypeId()     != null
                 ? masterDataService.toJsonArray(req.getAudienceTypeId()) : c.getAudienceTypeId();
         String newLanguage        = req.getLanguage()           != null
@@ -479,12 +479,15 @@ public class CampaignService {
                 : c.getVendorType();
         String newKpiType         = req.getKpiType()            != null ? req.getKpiType()            : c.getKpiType();
         String newExpectedOutput  = req.getExpectedOutput()     != null ? req.getExpectedOutput()     : c.getExpectedOutput();
+        String newStoreId         = req.getStoreId()            != null ? req.getStoreId()            : c.getStoreId();
+        String newContactNumber   = req.getContactNumber()      != null ? req.getContactNumber()      : c.getContactNumber();
 
         String reason = detectInconsistency(newPriority, newBudgetTier);
 
         campaignRepo.updateRequestorFields(
                 campaignId,
-                newDeptId, newTargetLocation, newBizObjective, newTaskTypeId,
+                newDeptId, newTargetLocation, newBizObjective,
+                newStoreId, newContactNumber,
                 newAudienceTypeId, newLanguage,
                 newHasOffer,
                 "YES".equals(newHasOffer) ? newOfferTypeId : null,
@@ -496,17 +499,18 @@ public class CampaignService {
 
         // Add new task deliverables
         if (req.getNewTaskSpecs() != null && !req.getNewTaskSpecs().isEmpty()) {
+            List<String> newGranularTaskIds = new java.util.ArrayList<>();
             Map<String, List<WorkTaskAnswerRequest.AnswerItem>> qa = new LinkedHashMap<>();
             List<TaskSpecRequest> validSpecs = new java.util.ArrayList<>();
             for (TaskSpecRequest spec : req.getNewTaskSpecs()) {
                 if (spec.getGranularTaskId() == null || spec.getGranularTaskId().isBlank()) continue;
-                campaignRepo.insertDeliverable(campaignId, spec.getGranularTaskId());
+                newGranularTaskIds.add(spec.getGranularTaskId());
                 if (spec.getQuestionnaireAnswers() != null && !spec.getQuestionnaireAnswers().isEmpty()) {
                     qa.put(spec.getGranularTaskId(), spec.getQuestionnaireAnswers());
                 }
                 validSpecs.add(spec);
             }
-            routingEngine.route(campaignId, qa, true);
+            routingEngine.route(campaignId, newGranularTaskIds, qa, true);
             // Link per-task reference files to newly created work tasks
             for (TaskSpecRequest spec : validSpecs) {
                 List<String> fileUrls = spec.getFileUrls();
@@ -559,6 +563,8 @@ public class CampaignService {
                 .forEach(wt -> {
                     workerCommentRepo.markAllAnswered(wt.getTaskId());
                     workTaskRepo.clearHoldByTaskId(wt.getTaskId());
+                    // Requestor answered the comment — resolve COMMENT_ADDED notification
+                    notificationService.resolveNotifications(wt.getTaskId(), "COMMENT_ADDED");
                     if (wt.getAssignedTo() != null) {
                         eventPublisher.publishEvent(
                                 new CommentRespondedEvent(wt.getTaskId(), requestorDisplayName, wt.getAssignedTo()));
@@ -641,8 +647,13 @@ public class CampaignService {
                 .requestorId(requestorId)
                 .departmentId(src.getDepartmentId())
                 .targetLocation(src.getTargetLocation())
-                .businessObjective(src.getBusinessObjective())
-                .taskTypeId(src.getTaskTypeId())
+                .businessObjective(src.getBusinessObjectiveId() != null ? src.getBusinessObjectiveId() : src.getBusinessObjective())
+                .campaignTypeId(src.getCampaignTypeId())
+                .businessVerticalId(src.getBusinessVerticalId())
+                .businessTypeId(src.getBusinessTypeId())
+                .storeFormatTypeId(src.getStoreFormatTypeId())
+                .storeId(src.getStoreId())
+                .contactNumber(src.getContactNumber())
                 .audienceTypeId(src.getAudienceTypeId())
                 .language(src.getLanguage())
                 .hasOffer(src.getHasOffer())
@@ -722,6 +733,8 @@ public class CampaignService {
         approvalLogRepo.insert(ApprovalLog.builder()
                 .taskId(taskId).reviewerId(actorId)
                 .actionTaken(ApprovalAction.UNHOLD).build());
+        // Manager un-held — resolve TASK_HELD_BY_MANAGER notification
+        notificationService.resolveNotifications(taskId, "TASK_HELD_BY_MANAGER");
         return toWorkTaskResponse(workTaskRepo.findById(taskId).orElseThrow());
     }
 
@@ -738,7 +751,7 @@ public class CampaignService {
      * skipped rather than blocking the whole operation.
      */
     @Transactional(noRollbackFor = org.springframework.dao.DataIntegrityViolationException.class)
-    public WorkTaskResponse cancelTask(String taskId) {
+    public WorkTaskResponse cancelTask(String taskId, int actorId) {
         log.info("TASK cancel | taskId={}", taskId);
         WorkTask task = workTaskRepo.findById(taskId)
                 .orElseThrow(() -> new ResourceNotFoundException("Task not found: " + taskId));
@@ -748,8 +761,13 @@ public class CampaignService {
                     "Only ASSIGNED, HELD or REWORK tasks can be cancelled — this task is " + s + ".");
         }
         workTaskRepo.markCancelled(taskId);
+        autoCreatedTaskService.cancelLinkedContentTaskOnSourceCancelledOrRejected(
+                taskId, "System (Source task cancelled)");
         log.info("TASK cancelled | taskId={} previousStatus={} assignee={}",
                 taskId, s, task.getAssignedTo());
+        approvalLogRepo.insert(ApprovalLog.builder()
+                .taskId(taskId).reviewerId(actorId)
+                .actionTaken(ApprovalAction.CANCELLED).build());
         if (task.getAssignedTo() != null && (s == TaskStatus.ASSIGNED || s == TaskStatus.REWORK)) {
             userRepo.decrementActiveTasks(task.getAssignedTo().longValue());
         }
@@ -837,48 +855,40 @@ public class CampaignService {
     // -------------------------------------------------------------------------
 
     /**
-     * Deletes a single task spec (by specId) from a campaign on behalf of the
-     * requestor.  Only the campaign owner may do this, and only for tasks that
-     * have not yet been started (status ASSIGNED, HELD, or ACCEPTED).
+     * Deletes a single work task from a campaign on behalf of the requestor.
+     * Only the campaign owner may do this, and only for tasks that have not yet
+     * been started (status ASSIGNED, HELD, or ACCEPTED).
      */
     @Transactional
-    public void requestorDeleteTask(int campaignId, int specId, int requestorId) {
-        log.info("TASK requestorDelete | campaignId={} specId={} requestorId={}",
-                campaignId, specId, requestorId);
+    public void requestorDeleteTask(int campaignId, String taskId, int callerId, boolean isManager) {
+        log.info("TASK requestorDelete | campaignId={} taskId={} callerId={} isManager={}",
+                campaignId, taskId, callerId, isManager);
         Campaign campaign = campaignRepo.findById(campaignId)
                 .orElseThrow(() -> new ResourceNotFoundException("Campaign not found: " + campaignId));
-        if (campaign.getRequestorId() != requestorId) {
+        if (!isManager && campaign.getRequestorId() != callerId) {
             throw new BadRequestException("You are not the requestor of this campaign.");
         }
 
-        CampaignDeliverable deliverable = campaignRepo.findDeliverableBySpecId(specId)
-                .orElseThrow(() -> new ResourceNotFoundException("Task spec not found: " + specId));
-        if (deliverable.getCampaignId() != campaignId) {
-            throw new BadRequestException("Task spec does not belong to this campaign.");
+        WorkTask wt = workTaskRepo.findById(taskId)
+                .orElseThrow(() -> new ResourceNotFoundException("Task not found: " + taskId));
+        if (wt.getCampaignId() != campaignId) {
+            throw new BadRequestException("Task does not belong to this campaign.");
         }
 
-        // Find the matching work task and validate its status
-        Optional<WorkTask> workTaskOpt = workTaskRepo.findOneByGranularTaskIdAndCampaignId(
-                deliverable.getGranularTaskId(), campaignId);
-        if (workTaskOpt.isPresent()) {
-            WorkTask wt = workTaskOpt.get();
-            TaskStatus status = wt.getStatus();
-            if (status == TaskStatus.IN_PROGRESS || status == TaskStatus.MANAGER_QC_REVIEW
-                    || status == TaskStatus.REWORK || status == TaskStatus.COMPLETED) {
-                throw new BadRequestException(
-                        "Cannot delete task '" + deliverable.getGranularTaskName()
-                        + "' — it has already been started (status: " + status + ").");
-            }
-            // Restore assignee capacity if task was actively assigned
-            if (status == TaskStatus.ASSIGNED || status == TaskStatus.ACCEPTED) {
-                if (wt.getAssignedTo() != null) {
-                    userRepo.decrementActiveTasks(wt.getAssignedTo().longValue());
-                }
-            }
-            workTaskRepo.deleteByTaskId(wt.getTaskId());
+        TaskStatus status = wt.getStatus();
+        if (status == TaskStatus.IN_PROGRESS || status == TaskStatus.MANAGER_QC_REVIEW
+                || status == TaskStatus.REWORK || status == TaskStatus.COMPLETED) {
+            throw new BadRequestException(
+                    "Cannot delete task '" + wt.getGranularTaskName()
+                    + "' — it has already been started (status: " + status + ").");
         }
-
-        campaignRepo.deleteDeliverableBySpecId(specId);
+        // Restore assignee capacity if task was actively assigned
+        if (status == TaskStatus.ASSIGNED || status == TaskStatus.ACCEPTED) {
+            if (wt.getAssignedTo() != null) {
+                userRepo.decrementActiveTasks(wt.getAssignedTo().longValue());
+            }
+        }
+        workTaskRepo.deleteByTaskId(taskId);
 
         // Recompute campaign status: if no tasks are pending any more, mark COMPLETED.
         recomputeCampaignStatusAfterTaskChange(campaignId);
@@ -964,16 +974,15 @@ public class CampaignService {
                 })
                 .collect(Collectors.toList());
         workTasks = autoCreatedTaskService.enrichAll(workTasks);
-        // Build a map granularTaskId → workTaskStatus for enriching deliverables
-        Map<String, String> statusByGranularTask = visibleTasks.stream()
-                .filter(wt -> wt.getGranularTaskId() != null && wt.getStatus() != null)
-                .collect(Collectors.toMap(
-                        wt -> wt.getGranularTaskId(),
-                        wt -> wt.getStatus().name(),
-                        (a, b) -> prioritiseTaskStatus(a, b)));
-        List<DeliverableResponse> deliverables = campaignRepo.findDeliverablesByCampaignId(cid)
-                .stream()
-                .map(d -> toDeliverableResponse(d, statusByGranularTask.get(d.getGranularTaskId())))
+        // Build deliverables from non-cancelled visible work tasks
+        List<DeliverableResponse> deliverables = visibleTasks.stream()
+                .filter(wt -> wt.getStatus() != TaskStatus.CANCELLED)
+                .map(wt -> DeliverableResponse.builder()
+                        .taskId(wt.getTaskId())
+                        .granularTaskId(wt.getGranularTaskId())
+                        .granularTaskName(wt.getGranularTaskName())
+                        .workTaskStatus(wt.getStatus() == null ? null : wt.getStatus().name())
+                        .build())
                 .collect(Collectors.toList());
         // Campaign-level files (work_task_id IS NULL)
         List<String> fileUrls        = campaignRepo.findFileUrlsByCampaignId(cid);
@@ -1008,8 +1017,6 @@ public class CampaignService {
 
     CampaignResponse toSummaryResponse(Campaign c) {
         // Resolve multi-select JSON arrays to comma-separated display names.
-        String taskTypeNames = masterDataService.resolveIdListToNames(
-                c.getTaskTypeId(), MasterTableType.TASK_TYPES);
         String audienceNames = masterDataService.resolveIdListToNames(
                 c.getAudienceTypeId(), MasterTableType.AUDIENCES);
         String languageNames = masterDataService.resolveIdListToNames(
@@ -1028,8 +1035,12 @@ public class CampaignService {
                 .targetLocation(c.getTargetLocation())
                 .businessObjectiveId(c.getBusinessObjectiveId())
                 .businessObjective(c.getBusinessObjective())
-                .taskTypeId(c.getTaskTypeId())
-                .taskTypeName(taskTypeNames)
+                .campaignTypeId(c.getCampaignTypeId())
+                .businessVerticalId(c.getBusinessVerticalId())
+                .businessTypeId(c.getBusinessTypeId())
+                .storeFormatTypeId(c.getStoreFormatTypeId())
+                .storeId(c.getStoreId())
+                .contactNumber(c.getContactNumber())
                 // Raw JSON arrays (for form pre-population on edit)
                 .audienceTypeId(c.getAudienceTypeId())
                 .languageIds(c.getLanguage())
@@ -1065,6 +1076,7 @@ public class CampaignService {
                 .completedTaskCount(c.getCompletedTaskCount())
                 .hasRework(c.getHasRework())
                 .hasQcReview(c.getHasQcReview())
+                .hasUnansweredComments(c.getHasUnansweredComments())
                 .deliverables(Collections.emptyList())
                 .workTasks(Collections.emptyList())
                 .build();
@@ -1104,26 +1116,10 @@ public class CampaignService {
                 .latestReworkSource(wt.getLatestReworkSource())
                 .collaborationStarted(wt.isCollaborationStarted())
                 .collaborationActive(wt.isCollaborationActive())
+                .storeId(wt.getStoreId())
+                .contactNumber(wt.getContactNumber())
+                .hasActiveComments(wt.isHasActiveComments())
                 .build();
-    }
-
-    static DeliverableResponse toDeliverableResponse(CampaignDeliverable d, String workTaskStatus) {
-        return DeliverableResponse.builder()
-                .specId(d.getSpecId())
-                .granularTaskId(d.getGranularTaskId())
-                .granularTaskName(d.getGranularTaskName())
-                .workTaskStatus(workTaskStatus)
-                .build();
-    }
-
-    /**
-     * When two work tasks share the same granular_task_id in a campaign, keep the
-     * status that is "more progressed" so the frontend correctly blocks deletion.
-     * Order: COMPLETED > REQUESTOR_QC_REVIEW > MANAGER_QC_REVIEW > REWORK > IN_PROGRESS > ACCEPTED > ASSIGNED > HELD > CANCELLED
-     */
-    private static String prioritiseTaskStatus(String a, String b) {
-        List<String> order = List.of("CANCELLED","HELD","ASSIGNED","ACCEPTED","IN_PROGRESS","REWORK","MANAGER_QC_REVIEW","REQUESTOR_QC_REVIEW","COMPLETED");
-        return order.indexOf(a) >= order.indexOf(b) ? a : b;
     }
 
 }

@@ -2,6 +2,8 @@ package com.medplus.marketing_automation_backend.service;
 
 import com.medplus.marketing_automation_backend.domain.Notification;
 import com.medplus.marketing_automation_backend.domain.NotificationTemplate;
+import com.medplus.marketing_automation_backend.dto.PagedResponse;
+import com.medplus.marketing_automation_backend.exception.ResourceNotFoundException;
 import com.medplus.marketing_automation_backend.domain.User;
 import com.medplus.marketing_automation_backend.event.CollaboratorAddedEvent;
 import com.medplus.marketing_automation_backend.event.NewTaskMessageEvent;
@@ -266,12 +268,22 @@ public class NotificationService {
         return notificationRepo.findAllTemplates();
     }
 
+    public PagedResponse<NotificationTemplate> getTemplatesPaged(String id,
+                                                                 String eventType,
+                                                                 String appliesTo,
+                                                                 String message,
+                                                                 String url,
+                                                                 int page, int size) {
+        return notificationRepo.findTemplatesPaged(id, eventType, appliesTo, message, url, page, size);
+    }
+
     public NotificationTemplate updateTemplate(long id, String messageTemplate, String urlTemplate) {
-        notificationRepo.updateTemplate(id, messageTemplate, urlTemplate);
-        return notificationRepo.findAllTemplates().stream()
-                .filter(t -> t.getId().equals(id))
-                .findFirst()
-                .orElseThrow();
+        int updated = notificationRepo.updateTemplate(id, messageTemplate, urlTemplate);
+        if (updated == 0) {
+            throw new ResourceNotFoundException("Notification template not found: " + id);
+        }
+        return notificationRepo.findTemplateById(id)
+                .orElseThrow(() -> new ResourceNotFoundException("Notification template not found: " + id));
     }
 
     // =========================================================================
@@ -295,10 +307,12 @@ public class NotificationService {
                 log.warn("No template found for eventType={} roleId={}", eventType, effectiveRole);
                 return;
             }
-            String message = applyVars(tmpl.getMessageTemplate(), vars);
-            String url     = applyVars(tmpl.getUrlTemplate(), vars);
+            String message     = applyVars(tmpl.getMessageTemplate(), vars);
+            String url         = applyVars(tmpl.getUrlTemplate(), vars);
+            // Extract referenceId from vars — "taskId" or "campaignId" if present
+            String referenceId = vars.getOrDefault("taskId", vars.getOrDefault("campaignId", null));
 
-            Notification saved = notificationRepo.insert(userId, eventType, message, url);
+            Notification saved = notificationRepo.insert(userId, eventType, message, url, referenceId);
 
             // Real-time push — fires immediately after DB commit
             messagingTemplate.convertAndSend(
@@ -307,6 +321,32 @@ public class NotificationService {
             log.debug("Notification sent | userId={} event={} id={}", userId, eventType, saved.getId());
         } catch (Exception ex) {
             log.error("Failed to send notification | userId={} event={}", userId, eventType, ex);
+        }
+    }
+
+    /**
+     * Resolves (marks status=0) all active notifications for a given task/campaign
+     * and the supplied event types. Pushes a STOMP REFRESH signal to each affected user
+     * so their bell panel updates in real-time.
+     */
+    public void resolveNotifications(String referenceId, String... eventTypes) {
+        try {
+            if (referenceId == null || eventTypes == null || eventTypes.length == 0) return;
+            List<String> types = java.util.Arrays.asList(eventTypes);
+            // Find affected users before resolving so we know who to STOMP
+            List<Long> affectedUsers = notificationRepo.findAffectedUserIds(referenceId, types);
+            notificationRepo.resolveByReference(referenceId, types);
+            // Push lightweight refresh signal so frontend removes resolved items instantly
+            // Include eventTypes so frontend only removes exact matches
+            for (Long uid : affectedUsers) {
+                Object payload = java.util.Map.of(
+                    "type",       "RESOLVED",
+                    "referenceId", referenceId,
+                    "eventTypes",  types);
+                messagingTemplate.convertAndSend("/topic/notifications/" + uid, payload);
+            }
+        } catch (Exception ex) {
+            log.error("Failed to resolve notifications | referenceId={}", referenceId, ex);
         }
     }
 

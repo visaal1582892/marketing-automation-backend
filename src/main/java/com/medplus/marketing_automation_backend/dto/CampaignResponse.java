@@ -21,9 +21,13 @@ public class CampaignResponse {
     private String        businessObjectiveId; // raw stored ID, for edit form pre-population
     private String        businessObjective;   // resolved display name
 
-    // Task Type (JSON array IDs stored in DB, resolved to display name at service layer)
-    private String        taskTypeId;
-    private String        taskTypeName;
+    private String        campaignTypeId;
+    private String        businessVerticalId;
+    private String        businessTypeId;
+    private String        storeFormatTypeId;
+
+    private String        storeId;
+    private String        contactNumber;
 
     private String        audienceTypeId;   // raw JSON array of IDs, for edit form pre-population
     private String        audienceName;     // resolved display names, for brief display
@@ -75,6 +79,8 @@ public class CampaignResponse {
     private Integer completedTaskCount;
     private Boolean hasRework;
     private Boolean hasQcReview;
+    /** True when any task on this campaign has at least one unanswered worker comment. */
+    private Boolean hasUnansweredComments;
 
     // Campaign-level supporting files uploaded by the requestor
     private List<String> fileUrls;

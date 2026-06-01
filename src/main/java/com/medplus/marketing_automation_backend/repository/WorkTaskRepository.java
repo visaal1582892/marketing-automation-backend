@@ -16,7 +16,9 @@ import java.sql.Timestamp;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 
 @Repository
@@ -63,11 +65,13 @@ public class WorkTaskRepository {
                    u.full_name    AS assignee_name,
                    gt.task_name  AS granular_task_name,
                    tt.task_name  AS task_type_name,
-                   c.deadline    AS campaign_deadline,
-                   c.priority    AS campaign_priority,
-                   c.status      AS campaign_status,
+                   c.deadline      AS campaign_deadline,
+                   c.priority      AS campaign_priority,
+                   c.status        AS campaign_status,
                    c.requestor_id,
-                   req.full_name AS requestor_name,
+                   c.store_id      AS campaign_store_id,
+                   c.contact_number AS campaign_contact_number,
+                   req.full_name   AS requestor_name,
                    (SELECT COUNT(*) FROM approvals_log al
                      WHERE al.task_id = wt.task_id
                        AND al.action_taken = 'NEEDS_REWORK') AS rework_count,
@@ -93,7 +97,10 @@ public class WorkTaskRepository {
                    (SELECT u_adb.full_name FROM approvals_log al_adb
                      LEFT JOIN users u_adb ON u_adb.user_id = al_adb.reviewer_id
                      WHERE al_adb.task_id = wt.task_id
-                     ORDER BY al_adb.log_id DESC LIMIT 1) AS latest_action_done_by_name
+                     ORDER BY al_adb.log_id DESC LIMIT 1) AS latest_action_done_by_name,
+                   (SELECT COUNT(*) > 0 FROM worker_comments wc
+                     WHERE wc.task_id = wt.task_id
+                       AND wc.is_answered = 0) AS has_active_comments
             """ + FROM_JOINS;
 
     // -------------------------------------------------------------------------
@@ -285,7 +292,8 @@ public class WorkTaskRepository {
                 UPDATE work_tasks
                    SET status              = 'REWORK',
                        submitted_at        = NULL,
-                       manager_approved_at = NULL
+                       manager_approved_at = NULL,
+                       started_at          = CURRENT_TIMESTAMP(6)
                  WHERE task_id = :id
                 """,
                 new MapSqlParameterSource("id", taskId));
@@ -305,7 +313,8 @@ public class WorkTaskRepository {
     public int markHeld(String taskId) {
         return jdbc.update("""
                 UPDATE work_tasks
-                   SET status = 'HELD'
+                   SET pre_hold_status = status,
+                       status          = 'HELD'
                  WHERE task_id = :id
                    AND status IN ('ASSIGNED', 'REWORK')
                 """,
@@ -313,26 +322,29 @@ public class WorkTaskRepository {
     }
 
     /**
-     * Re-assigns a HELD task to a (potentially different) user and flips its
-     * status back to ASSIGNED. Called from the routing engine after a
-     * successful capacity match during unhold. Stamps a new {@code assigned_at}
-     * so time-tracking shows the latest hand-off, and clears any stale
-     * acceptance/start timestamps from the previous assignment cycle.
+     * Re-assigns a HELD task to a (potentially different) user and restores
+     * {@code pre_hold_status} (ASSIGNED, REWORK, etc.).
+     *
+     * <p>When the pre-hold state was IN_PROGRESS, we resume as ASSIGNED so the
+     * newly assigned user explicitly starts the task. In that case acceptance
+     * timestamps are cleared.
      */
     public int reassignFromHeld(String taskId, int newAssigneeId) {
         return jdbc.update("""
                 UPDATE work_tasks
-                   SET status      = 'ASSIGNED',
-                       assigned_to = :uid,
-                       assigned_at = :now,
-                       accepted_at = NULL,
-                       started_at  = NULL
+                   SET status          = CASE
+                                            WHEN COALESCE(pre_hold_status, 'ASSIGNED') = 'IN_PROGRESS' THEN 'ASSIGNED'
+                                            ELSE COALESCE(pre_hold_status, 'ASSIGNED')
+                                         END,
+                       pre_hold_status = NULL,
+                       assigned_to     = :uid,
+                       accepted_at     = IF(COALESCE(pre_hold_status, 'ASSIGNED') IN ('ASSIGNED','IN_PROGRESS'), NULL, accepted_at),
+                       started_at      = IF(COALESCE(pre_hold_status, 'ASSIGNED') IN ('ASSIGNED','IN_PROGRESS'), NULL, started_at)
                  WHERE task_id = :id
                    AND status  = 'HELD'
                 """,
                 new MapSqlParameterSource("id",  taskId)
-                        .addValue("uid", newAssigneeId)
-                        .addValue("now", Timestamp.valueOf(LocalDateTime.now())));
+                        .addValue("uid", newAssigneeId));
     }
 
     /**
@@ -362,16 +374,20 @@ public class WorkTaskRepository {
     public int clearHold(String taskId, int userId) {
         return jdbc.update("""
                 UPDATE work_tasks
-                   SET status          = COALESCE(pre_hold_status, 'ASSIGNED'),
-                       pre_hold_status = NULL,
-                       assigned_at     = :now
+                   SET status          = CASE
+                                            WHEN COALESCE(pre_hold_status, 'ASSIGNED') IN ('ASSIGNED','IN_PROGRESS','REWORK')
+                                              THEN 'IN_PROGRESS'
+                                            ELSE COALESCE(pre_hold_status, 'ASSIGNED')
+                                         END,
+                       accepted_at     = COALESCE(accepted_at, CURRENT_TIMESTAMP(6)),
+                       started_at      = COALESCE(started_at, accepted_at, CURRENT_TIMESTAMP(6)),
+                       pre_hold_status = NULL
                  WHERE task_id     = :id
                    AND assigned_to = :uid
                    AND status      = 'HELD'
                 """,
                 new MapSqlParameterSource("id",  taskId)
-                        .addValue("uid", userId)
-                        .addValue("now", Timestamp.valueOf(LocalDateTime.now())));
+                        .addValue("uid", userId));
     }
 
     /**
@@ -382,14 +398,18 @@ public class WorkTaskRepository {
     public int clearHoldByTaskId(String taskId) {
         return jdbc.update("""
                 UPDATE work_tasks
-                   SET status          = COALESCE(pre_hold_status, 'ASSIGNED'),
-                       pre_hold_status = NULL,
-                       assigned_at     = :now
+                   SET status          = CASE
+                                            WHEN COALESCE(pre_hold_status, 'ASSIGNED') IN ('ASSIGNED','IN_PROGRESS','REWORK')
+                                              THEN 'IN_PROGRESS'
+                                            ELSE COALESCE(pre_hold_status, 'ASSIGNED')
+                                         END,
+                       accepted_at     = COALESCE(accepted_at, CURRENT_TIMESTAMP(6)),
+                       started_at      = COALESCE(started_at, accepted_at, CURRENT_TIMESTAMP(6)),
+                       pre_hold_status = NULL
                  WHERE task_id = :id
                    AND status  = 'HELD'
                 """,
-                new MapSqlParameterSource("id",  taskId)
-                        .addValue("now", Timestamp.valueOf(LocalDateTime.now())));
+                new MapSqlParameterSource("id",  taskId));
     }
 
     /**
@@ -573,26 +593,8 @@ public class WorkTaskRepository {
         }
     }
 
-    /**
-     * Lists every active task assigned to a user, sorted to enforce the
-     * Module 2-C "Top Queueing" rule + the single-active-task queue UX:
-     *
-     *   1. The in-flight task (IN_PROGRESS) is pinned to the top, so the
-     *      live timer is the first thing the worker sees when they open
-     *      "My Tasks".
-     *   2. Then open work in priority order: HIGH+Paid Ads → HIGH → MEDIUM
-     *      → LOW. Within a priority bucket, REWORK comes before fresh
-     *      ASSIGNED items because rework is more time-sensitive.
-     *   3. Then MANAGER_QC_REVIEW (waiting on the manager) / REQUESTOR_QC_REVIEW (waiting on requestor).
-     *   4. Then terminal states (COMPLETED / CANCELLED) at the bottom.
-     *   5. Final tie-break is updated_at DESC so recently-touched tasks surface first.
-     */
-    public List<WorkTask> findByAssignedTo(int userId) {
-        // HELD tasks are now included so the worker can see them in their
-        // "On Hold" bucket. They are sorted after active work so they don't
-        // clutter the top of the queue.
-        String sql = SELECT_BASE + """
-                 WHERE wt.assigned_to = :uid
+    /** Open tab: queue by status + priority (high→low); within each bucket, newest activity first. */
+    private static final String MY_TASKS_ORDER_OPEN = """
                  ORDER BY
                    CASE wt.status
                      WHEN 'IN_PROGRESS'         THEN 0
@@ -618,12 +620,191 @@ public class WorkTaskRepository {
                      WHEN 'ASSIGNED' THEN 1
                      ELSE                 2
                    END,
-                   COALESCE(wt.updated_at, wt.created_at) DESC
+                   COALESCE(wt.updated_at, wt.created_at) DESC,
+                   CAST(SUBSTRING(wt.task_id, 11) AS UNSIGNED) DESC
                 """;
-        return jdbc.query(sql,
-                new MapSqlParameterSource("uid", userId),
-                WorkTaskRepository::map);
+
+    /** Other tabs: most recently modified first. */
+    private static final String MY_TASKS_ORDER_RECENT = """
+                 ORDER BY COALESCE(wt.updated_at, wt.created_at) DESC,
+                          CAST(SUBSTRING(wt.task_id, 11) AS UNSIGNED) DESC
+                """;
+
+    private static String myTasksOrderFor(String statusGroup) {
+        if (statusGroup != null && "OPEN".equalsIgnoreCase(statusGroup.trim())) {
+            return MY_TASKS_ORDER_OPEN;
+        }
+        return MY_TASKS_ORDER_RECENT;
     }
+
+    public List<WorkTask> findByAssignedTo(int userId) {
+        return findByAssignedToFiltered(userId, null);
+    }
+
+    /**
+     * Same as {@link #findByAssignedTo} but additionally filters by a free-text
+     * search across task ID, campaign ID, task name, task type, and requestor name.
+     * When {@code search} is null or blank the method behaves identically to
+     * {@link #findByAssignedTo}.
+     */
+    public List<WorkTask> findByAssignedToFiltered(int userId, String search) {
+        MapSqlParameterSource params = new MapSqlParameterSource("uid", userId);
+        String whereClause = " WHERE wt.assigned_to = :uid";
+        if (search != null && !search.isBlank()) {
+            whereClause += """
+                      AND (wt.task_id                  LIKE :q
+                        OR CAST(wt.campaign_id AS CHAR) LIKE :q
+                        OR gt.task_name                LIKE :q
+                        OR tt.task_name                LIKE :q
+                        OR req.full_name               LIKE :q
+                        OR c.store_id                  LIKE :q
+                        OR c.contact_number            LIKE :q)
+                    """;
+            params.addValue("q", "%" + search.trim() + "%");
+        }
+        return jdbc.query(SELECT_BASE + whereClause + MY_TASKS_ORDER_RECENT, params, WorkTaskRepository::map);
+    }
+
+    // ── My-Tasks paged API ────────────────────────────────────────────────────
+
+    /**
+     * Appends optional search LIKE clauses and a status-group (tab) filter to
+     * {@code where}.  Mutates {@code params} to add any required named values.
+     */
+    private static void appendSearchAndTabClauses(StringBuilder where,
+                                                   String search,
+                                                   String statusGroup,
+                                                   MapSqlParameterSource params) {
+        if (search != null && !search.isBlank()) {
+            where.append("""
+                      AND (wt.task_id                  LIKE :q
+                        OR CAST(wt.campaign_id AS CHAR) LIKE :q
+                        OR gt.task_name                LIKE :q
+                        OR tt.task_name                LIKE :q
+                        OR req.full_name               LIKE :q
+                        OR c.store_id                  LIKE :q
+                        OR c.contact_number            LIKE :q)
+                    """);
+            params.addValue("q", "%" + search.trim() + "%");
+        }
+        if (statusGroup == null) return;
+        switch (statusGroup.toUpperCase()) {
+            case "OPEN" ->
+                where.append("""
+                       AND wt.status IN ('ASSIGNED','IN_PROGRESS','REWORK')
+                       AND (c.status IS NULL OR c.status NOT IN ('REJECTED','COMPLETED'))
+                    """);
+            case "QC" ->
+                where.append(" AND wt.status IN ('MANAGER_QC_REVIEW','REQUESTOR_QC_REVIEW')");
+            case "DONE" ->
+                where.append(" AND wt.status = 'COMPLETED'");
+            case "HELD" ->
+                where.append(" AND wt.status = 'HELD'");
+            case "CANCELLED" ->
+                where.append("""
+                       AND (wt.status = 'CANCELLED'
+                         OR (wt.status IN ('ASSIGNED','IN_PROGRESS','REWORK',
+                                           'MANAGER_QC_REVIEW','REQUESTOR_QC_REVIEW')
+                             AND c.status IN ('REJECTED','COMPLETED')))
+                    """);
+            // "ALL" or unknown → no extra filter
+        }
+    }
+
+    /** Total rows matching the given tab + optional search filter.  Used for pagination metadata. */
+    public long countForMyTasks(int userId, String search, String statusGroup) {
+        MapSqlParameterSource params = new MapSqlParameterSource("uid", userId);
+        StringBuilder where = new StringBuilder(" WHERE wt.assigned_to = :uid");
+        appendSearchAndTabClauses(where, search, statusGroup, params);
+        Long count = jdbc.queryForObject(COUNT_BASE + where, params, Long.class);
+        return count != null ? count : 0L;
+    }
+
+    /** One page of tasks for the My-Tasks view, applying tab + search filters and priority ordering. */
+    public List<WorkTask> findForMyTasksPaged(int userId, String search, String statusGroup,
+                                              int page, int size) {
+        MapSqlParameterSource params = new MapSqlParameterSource("uid", userId)
+                .addValue("lim", size)
+                .addValue("off", (long) page * size);
+        StringBuilder where = new StringBuilder(" WHERE wt.assigned_to = :uid");
+        appendSearchAndTabClauses(where, search, statusGroup, params);
+        String sql = SELECT_BASE + where + myTasksOrderFor(statusGroup) + " LIMIT :lim OFFSET :off";
+        return jdbc.query(sql, params, WorkTaskRepository::map);
+    }
+
+    /**
+     * Counts how many of the user's tasks are currently IN_PROGRESS on a live campaign.
+     * Used to calculate available queue slots for the canStart flag.
+     */
+    public int countInFlight(int userId) {
+        String sql = """
+                SELECT COUNT(*)
+                  FROM work_tasks wt
+                  LEFT JOIN campaigns c ON c.campaign_id = wt.campaign_id
+                 WHERE wt.assigned_to = :uid
+                   AND wt.status = 'IN_PROGRESS'
+                   AND (c.status IS NULL OR c.status NOT IN ('REJECTED','COMPLETED'))
+                """;
+        Integer n = jdbc.queryForObject(sql, new MapSqlParameterSource("uid", userId), Integer.class);
+        return n != null ? n : 0;
+    }
+
+    /**
+     * Returns the task IDs of the first {@code slots} ASSIGNED tasks in priority order.
+     * These are the tasks the user is allowed to start next.
+     */
+    public List<String> findStartableTaskIds(int userId, int slots) {
+        if (slots <= 0) return List.of();
+        String sql = "SELECT wt.task_id " + FROM_JOINS
+                + " WHERE wt.assigned_to = :uid"
+                + " AND wt.status = 'ASSIGNED'"
+                + " AND (c.status IS NULL OR c.status NOT IN ('REJECTED','COMPLETED'))"
+                + MY_TASKS_ORDER_OPEN
+                + " LIMIT :slots";
+        return jdbc.query(sql,
+                new MapSqlParameterSource("uid", userId).addValue("slots", slots),
+                (rs, row) -> rs.getString("task_id"));
+    }
+
+    /**
+     * Tab badge counts across ALL of the user's tasks (no search / tab filter applied).
+     * Keys: open, held, qc, done, cancelled, all.
+     */
+    public Map<String, Long> getTabCounts(int userId) {
+        String sql = """
+                SELECT
+                  SUM(CASE WHEN wt.status IN ('ASSIGNED','IN_PROGRESS','REWORK')
+                            AND (c.status IS NULL OR c.status NOT IN ('REJECTED','COMPLETED'))
+                       THEN 1 ELSE 0 END) AS open_count,
+                  SUM(CASE WHEN wt.status = 'HELD'
+                       THEN 1 ELSE 0 END) AS held_count,
+                  SUM(CASE WHEN wt.status IN ('MANAGER_QC_REVIEW','REQUESTOR_QC_REVIEW')
+                       THEN 1 ELSE 0 END) AS qc_count,
+                  SUM(CASE WHEN wt.status = 'COMPLETED'
+                       THEN 1 ELSE 0 END) AS done_count,
+                  SUM(CASE WHEN wt.status = 'CANCELLED'
+                            OR (wt.status IN ('ASSIGNED','IN_PROGRESS','REWORK',
+                                              'MANAGER_QC_REVIEW','REQUESTOR_QC_REVIEW')
+                                AND c.status IN ('REJECTED','COMPLETED'))
+                       THEN 1 ELSE 0 END) AS cancelled_count,
+                  COUNT(*) AS all_count
+                FROM work_tasks wt
+                LEFT JOIN campaigns c ON c.campaign_id = wt.campaign_id
+                WHERE wt.assigned_to = :uid
+                """;
+        return jdbc.queryForObject(sql, new MapSqlParameterSource("uid", userId), (rs, row) -> {
+            Map<String, Long> map = new LinkedHashMap<>();
+            map.put("open",      rs.getLong("open_count"));
+            map.put("held",      rs.getLong("held_count"));
+            map.put("qc",        rs.getLong("qc_count"));
+            map.put("done",      rs.getLong("done_count"));
+            map.put("cancelled", rs.getLong("cancelled_count"));
+            map.put("all",       rs.getLong("all_count"));
+            return map;
+        });
+    }
+
+    // ── End My-Tasks paged API ────────────────────────────────────────────────
 
     public List<WorkTask> findByIds(List<String> ids) {
         if (ids == null || ids.isEmpty()) return java.util.Collections.emptyList();
@@ -965,14 +1146,16 @@ public class WorkTaskRepository {
                 new MapSqlParameterSource());
         result.put("campaignsByPriority", campaignByPriority);
 
-        // ── Campaigns by task type (top 8) ────────────────────────────────────
+        // ── Tasks by task type (top 8) ────────────────────────────────────────
         var campaignByType = jdbc.queryForList(
                 """
-                SELECT COALESCE(tt.task_name, c.task_type_id, 'Unknown') AS name,
-                       COUNT(c.campaign_id) AS cnt
-                FROM campaigns c
-                LEFT JOIN task_types tt ON JSON_CONTAINS(c.task_type_id, JSON_QUOTE(tt.task_type_id))
-                GROUP BY name ORDER BY cnt DESC LIMIT 8
+                SELECT COALESCE(tt.task_name, 'Unknown') AS name,
+                       COUNT(*) AS cnt
+                FROM work_tasks wt
+                LEFT JOIN granular_tasks gt ON gt.task_id = wt.granular_task_id
+                LEFT JOIN task_types tt ON tt.task_type_id = gt.task_type_id
+                GROUP BY tt.task_type_id, tt.task_name
+                ORDER BY cnt DESC LIMIT 8
                 """,
                 new MapSqlParameterSource());
         result.put("campaignsByType", campaignByType);
@@ -1086,11 +1269,17 @@ public class WorkTaskRepository {
             String taskType, String priority, String status,
             Boolean autoGeneratedOnly,
             LocalDate dateFrom, LocalDate dateTo,
+            String actionDoneBy,
+            String storeId,
+            String sourceTaskId,
+            String contentRequestedBy,
+            String contentRequestStatus,
             int page, int size) {
 
         MapSqlParameterSource params = new MapSqlParameterSource();
         String where = buildAllTasksWhere(params, taskId, campaignId,
-                requestorName, assigneeName, taskType, priority, status, autoGeneratedOnly, dateFrom, dateTo);
+                requestorName, assigneeName, taskType, priority, status, autoGeneratedOnly, dateFrom, dateTo,
+                actionDoneBy, storeId, sourceTaskId, contentRequestedBy, contentRequestStatus);
 
         Long total = jdbc.queryForObject(COUNT_BASE + where, params, Long.class);
         if (total == null) total = 0L;
@@ -1170,7 +1359,9 @@ public class WorkTaskRepository {
             String taskId, String campaignId,
             String requestorName, String assigneeName,
             String taskType, String priority, String status, Boolean autoGeneratedOnly,
-            LocalDate dateFrom, LocalDate dateTo) {
+            LocalDate dateFrom, LocalDate dateTo, String actionDoneBy,
+            String storeId,
+            String sourceTaskId, String contentRequestedBy, String contentRequestStatus) {
 
         List<String> conds = new ArrayList<>();
 
@@ -1214,6 +1405,44 @@ public class WorkTaskRepository {
         if (dateTo != null) {
             conds.add("wt.created_at <= :dateTo");
             params.addValue("dateTo", dateTo.atTime(23, 59, 59));
+        }
+        if (hasValue(actionDoneBy)) {
+            conds.add("""
+                    (SELECT u_adb.full_name FROM approvals_log al_adb
+                      LEFT JOIN users u_adb ON u_adb.user_id = al_adb.reviewer_id
+                      WHERE al_adb.task_id = wt.task_id
+                      ORDER BY al_adb.log_id DESC LIMIT 1) LIKE :actionDoneBy
+                    """);
+            params.addValue("actionDoneBy", "%" + actionDoneBy.trim() + "%");
+        }
+        if (hasValue(storeId)) {
+            conds.add("c.store_id LIKE :storeId");
+            params.addValue("storeId", "%" + storeId.trim() + "%");
+        }
+        if (hasValue(sourceTaskId)) {
+            conds.add("""
+                    EXISTS (SELECT 1 FROM auto_created_tasks act
+                            WHERE act.created_task_id = wt.task_id
+                              AND act.source_task_id LIKE :sourceTaskId)
+                    """);
+            params.addValue("sourceTaskId", "%" + sourceTaskId.trim() + "%");
+        }
+        if (hasValue(contentRequestedBy)) {
+            conds.add("""
+                    EXISTS (SELECT 1 FROM auto_created_tasks act
+                            INNER JOIN users cr ON cr.user_id = act.requested_by_user_id
+                            WHERE act.created_task_id = wt.task_id
+                              AND cr.full_name LIKE :contentRequestedBy)
+                    """);
+            params.addValue("contentRequestedBy", "%" + contentRequestedBy.trim() + "%");
+        }
+        if (hasValue(contentRequestStatus)) {
+            conds.add("""
+                    EXISTS (SELECT 1 FROM auto_created_tasks act
+                            WHERE act.created_task_id = wt.task_id
+                              AND act.status = :contentRequestStatus)
+                    """);
+            params.addValue("contentRequestStatus", contentRequestStatus.trim());
         }
 
         return conds.isEmpty() ? "" : " WHERE " + String.join(" AND ", conds);
@@ -1281,6 +1510,9 @@ public class WorkTaskRepository {
                 .campaignStatus(safeEnum(CampaignStatus.class, rs.getString("campaign_status")))
                 .requestorId(getNullableInt(rs, "requestor_id"))
                 .requestorName(rs.getString("requestor_name"))
+                .storeId(rs.getString("campaign_store_id"))
+                .contactNumber(rs.getString("campaign_contact_number"))
+                .hasActiveComments(rs.getBoolean("has_active_comments"))
                 .build();
     }
 

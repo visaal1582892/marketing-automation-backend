@@ -25,25 +25,33 @@ import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import com.medplus.marketing_automation_backend.dto.MyTasksListResponse;
+import lombok.extern.slf4j.Slf4j;
+
 import java.time.Duration;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
+import java.util.Set;
 import java.util.stream.Collectors;
 
 
 
+@Slf4j
 @Service
 public class WorkTaskService {
 
     private final WorkTaskRepository      workTaskRepo;
-    private final WorkerCommentRepository workerCommentRepo;
-    private final ApprovalLogRepository   approvalLogRepo;
-    private final AutoCreatedTaskService  autoCreatedTaskService;
-    private final UserRepository          userRepo;
-    private final CollaborationService    collaborationService;
-    private final CampaignRepository      campaignRepo;
+    private final WorkerCommentRepository   workerCommentRepo;
+    private final ApprovalLogRepository     approvalLogRepo;
+    private final AutoCreatedTaskService    autoCreatedTaskService;
+    private final UserRepository            userRepo;
+    private final CollaborationService      collaborationService;
+    private final CampaignRepository        campaignRepo;
     private final ApplicationEventPublisher eventPublisher;
+    private final NotificationService       notificationService;
 
     public WorkTaskService(WorkTaskRepository workTaskRepo,
                            WorkerCommentRepository workerCommentRepo,
@@ -52,27 +60,61 @@ public class WorkTaskService {
                            UserRepository userRepo,
                            CollaborationService collaborationService,
                            CampaignRepository campaignRepo,
-                           ApplicationEventPublisher eventPublisher) {
-        this.workTaskRepo          = workTaskRepo;
-        this.workerCommentRepo     = workerCommentRepo;
-        this.approvalLogRepo       = approvalLogRepo;
-        this.autoCreatedTaskService = autoCreatedTaskService;
-        this.userRepo              = userRepo;
-        this.collaborationService  = collaborationService;
-        this.campaignRepo          = campaignRepo;
-        this.eventPublisher        = eventPublisher;
+                           ApplicationEventPublisher eventPublisher,
+                           NotificationService notificationService) {
+        this.workTaskRepo           = workTaskRepo;
+        this.workerCommentRepo      = workerCommentRepo;
+        this.approvalLogRepo        = approvalLogRepo;
+        this.autoCreatedTaskService  = autoCreatedTaskService;
+        this.userRepo               = userRepo;
+        this.collaborationService   = collaborationService;
+        this.campaignRepo           = campaignRepo;
+        this.eventPublisher         = eventPublisher;
+        this.notificationService    = notificationService;
     }
 
     // -------------------------------------------------------------------------
     // Employee-facing
     // -------------------------------------------------------------------------
 
-    /** Returns all tasks assigned to the given user, enriched with active comments. */
-    public List<WorkTaskResponse> listMy(int userId) {
-        List<WorkTaskResponse> responses = workTaskRepo.findByAssignedTo(userId).stream()
-                .map(t -> enrichWithComments(CampaignService.toWorkTaskResponse(t), t.getTaskId()))
+    private static final int MAX_IN_FLIGHT = 3;
+
+    /**
+     * Returns a paginated view of the current user's tasks with:
+     * <ul>
+     *   <li>Server-side search ({@code q}) and tab ({@code statusGroup}) filtering</li>
+     *   <li>Tab badge counts (always from the full list, unaffected by search/tab)</li>
+     *   <li>Per-task {@code canStart} flag computed from the real priority queue</li>
+     *   <li>{@code inFlightFull} flag so the UI knows which lock message to display</li>
+     * </ul>
+     */
+    public MyTasksListResponse listMyPaged(int userId, String search,
+                                           String statusGroup, int page, int size) {
+        // ── 1. Queue logic — always uses full unfiltered list ─────────────────
+        int inFlight   = workTaskRepo.countInFlight(userId);
+        boolean inFlightFull = inFlight >= MAX_IN_FLIGHT;
+        int slots      = Math.max(0, MAX_IN_FLIGHT - inFlight);
+        Set<String> startableIds = new HashSet<>(workTaskRepo.findStartableTaskIds(userId, slots));
+
+        // ── 2. Tab badge counts (always full list, no search/tab filter) ──────
+        Map<String, Long> tabCounts = workTaskRepo.getTabCounts(userId);
+
+        // ── 3. Paged data ────────────────────────────────────────────────────
+        long total      = workTaskRepo.countForMyTasks(userId, search, statusGroup);
+        int  totalPages = size <= 0 ? 1 : (int) Math.ceil((double) total / size);
+        List<WorkTask> rawPage = workTaskRepo.findForMyTasksPaged(userId, search, statusGroup, page, size);
+
+        List<WorkTaskResponse> responses = rawPage.stream()
+                .map(t -> {
+                    WorkTaskResponse r = enrichWithComments(
+                            CampaignService.toWorkTaskResponse(t), t.getTaskId());
+                    r.setCanStart(startableIds.contains(t.getTaskId()));
+                    return r;
+                })
                 .collect(Collectors.toList());
-        return autoCreatedTaskService.enrichAll(responses);
+        responses = autoCreatedTaskService.enrichAll(responses);
+
+        return new MyTasksListResponse(responses, total, totalPages, page, size, inFlightFull, tabCounts);
     }
 
     public WorkTaskResponse get(String taskId, int userId) {
@@ -126,6 +168,9 @@ public class WorkTaskService {
         // Auto-create collaboration the moment the worker starts the task so
         // the chat + assets are immediately available without a separate click.
         collaborationService.startCollaboration(taskId, userId);
+        // Resolve TASK_ASSIGNED / MANAGER_REWORK / REQUESTOR_REWORK notifications — action taken
+        notificationService.resolveNotifications(taskId,
+                "TASK_ASSIGNED", "MANAGER_REWORK", "REQUESTOR_REWORK");
         return autoCreatedTaskService.enrich(CampaignService.toWorkTaskResponse(
                 workTaskRepo.findById(taskId).orElseThrow()));
     }
@@ -143,8 +188,8 @@ public class WorkTaskService {
         autoCreatedTaskService.assertRequestorCannotAccessAutoContentTask(taskId, userId);
         WorkTask task = findAndAuthorize(taskId, userId);
 
-        if (task.getStatus() != TaskStatus.IN_PROGRESS) {
-            throw new BadRequestException("Task must be IN_PROGRESS to complete. Current status: " + task.getStatus());
+        if (task.getStatus() != TaskStatus.IN_PROGRESS && task.getStatus() != TaskStatus.REWORK) {
+            throw new BadRequestException("Task must be IN_PROGRESS or REWORK to complete. Current status: " + task.getStatus());
         }
         // Same defensive check as accept() — don't accept a QC submission for
         // a task whose campaign was rejected mid-flight.
@@ -157,11 +202,13 @@ public class WorkTaskService {
 
         LocalDateTime now = LocalDateTime.now();
         int minutes = 0;
-        if (task.getStartedAt() != null) {
-            minutes = (int) Duration.between(task.getStartedAt(), now).toMinutes();
+        LocalDateTime cycleStart = task.getAcceptedAt() != null ? task.getAcceptedAt() : task.getStartedAt();
+        if (cycleStart != null) {
+            minutes = (int) Duration.between(cycleStart, now).toMinutes();
         }
         // Add to any previously logged time (handles rework cycles).
-        int previous = task.getTotalTimeLoggedMinutes() == null ? 0 : task.getTotalTimeLoggedMinutes();
+        Integer previousLogged = task.getTotalTimeLoggedMinutes();
+        int previous = previousLogged == null ? 0 : previousLogged;
         int totalMinutes = previous + Math.max(0, minutes);
 
         int updated;
@@ -187,6 +234,8 @@ public class WorkTaskService {
             }
             // Rule 5: task is now MANAGER_QC_REVIEW — deactivate collaboration
             workTaskRepo.deactivateCollaboration(taskId);
+            // QC submission resolves any open worker comments.
+            workerCommentRepo.markAllAnswered(taskId);
             // Close any linked auto-generated content task — the designer has
             // finished and no further content support is needed.
             autoCreatedTaskService.closeLinkedContentTaskOnSourceQcSubmit(taskId);
@@ -259,6 +308,8 @@ public class WorkTaskService {
         if (restored.getStatus() == TaskStatus.IN_PROGRESS) {
             workTaskRepo.activateCollaboration(taskId);
         }
+        // Worker resumed — resolve COMMENT_RESPONDED notification (they saw it and acted)
+        notificationService.resolveNotifications(taskId, "COMMENT_RESPONDED");
         return CampaignService.toWorkTaskResponse(
                 workTaskRepo.findById(taskId).orElseThrow());
     }
@@ -267,12 +318,32 @@ public class WorkTaskService {
     @Transactional
     public void markCommentAnswered(String taskId, int commentId, int actorUserId) {
         workerCommentRepo.markAnswered(commentId);
+        // Requestor answered comment — resolve COMMENT_ADDED notification for that task
+        notificationService.resolveNotifications(taskId, "COMMENT_ADDED");
         // Notify the task assignee that their comment was addressed
         WorkTask task = workTaskRepo.findById(taskId).orElse(null);
         if (task != null && task.getAssignedTo() != null && task.getAssignedTo() != actorUserId) {
             User actor = userRepo.findById((long) actorUserId).orElse(null);
             String responderName = actor != null && actor.getFullName() != null ? actor.getFullName() : "Requestor";
             eventPublisher.publishEvent(new CommentRespondedEvent(taskId, responderName, task.getAssignedTo()));
+        }
+        // If no unanswered comments remain and task is still HELD, auto-unhold back to pre-hold status
+        if (task != null && task.getStatus() == TaskStatus.HELD) {
+            boolean noMoreOpen = workerCommentRepo.findActiveByTaskId(taskId).isEmpty();
+            if (noMoreOpen) {
+                int updated = workTaskRepo.clearHoldByTaskId(taskId);
+                if (updated > 0) {
+                    log.info("COMMENT answered | auto-cleared hold on task={} by actor={}", taskId, actorUserId);
+                    approvalLogRepo.insert(ApprovalLog.builder()
+                            .taskId(taskId).reviewerId(actorUserId)
+                            .actionTaken(ApprovalAction.UNHOLD).build());
+                    WorkTask restored = workTaskRepo.findById(taskId).orElse(null);
+                    if (restored != null && restored.getStatus() == TaskStatus.IN_PROGRESS) {
+                        workTaskRepo.activateCollaboration(taskId);
+                    }
+                    notificationService.resolveNotifications(taskId, "TASK_HELD_BY_MANAGER");
+                }
+            }
         }
     }
 
@@ -300,11 +371,17 @@ public class WorkTaskService {
             String taskType, String priority, String status,
             Boolean autoGeneratedOnly,
             LocalDate dateFrom, LocalDate dateTo,
+            String actionDoneBy,
+            String storeId,
+            String sourceTaskId,
+            String contentRequestedBy,
+            String contentRequestStatus,
             int page, int size) {
 
         PagedResponse<WorkTask> raw = workTaskRepo.findAllPaged(
                 taskId, campaignId, requestorName, assigneeName,
-                taskType, priority, status, autoGeneratedOnly, dateFrom, dateTo, page, size);
+                taskType, priority, status, autoGeneratedOnly, dateFrom, dateTo,
+                actionDoneBy, storeId, sourceTaskId, contentRequestedBy, contentRequestStatus, page, size);
 
         List<WorkTaskResponse> mapped = raw.content().stream()
                 .map(CampaignService::toWorkTaskResponse)

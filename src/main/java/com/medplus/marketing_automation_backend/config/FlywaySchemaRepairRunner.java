@@ -1,13 +1,14 @@
 package com.medplus.marketing_automation_backend.config;
 
-import lombok.extern.slf4j.Slf4j;
+import javax.sql.DataSource;
+
 import org.flywaydb.core.Flyway;
 import org.springframework.boot.CommandLineRunner;
 import org.springframework.core.annotation.Order;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Component;
 
-import javax.sql.DataSource;
+import lombok.extern.slf4j.Slf4j;
 
 /**
  * Runs before any other CommandLineRunner (@Order(0)) as a final safety net.
@@ -43,7 +44,7 @@ public class FlywaySchemaRepairRunner implements CommandLineRunner {
             log.warn("FlywaySchemaRepairRunner: user_roles still missing after context init — applying DDL directly.");
             createUserRolesDirectly();
         }
-        ensureTaskTypeIdColumn();
+        ensureNoTaskTypeIdColumn();
         ensureActionDoneByColumn();
         ensureCampaignColumns();
         ensureWorkTaskColumns();
@@ -60,6 +61,20 @@ public class FlywaySchemaRepairRunner implements CommandLineRunner {
         ensureAutoContentGranularTask();
         ensureCampaignFilesWorkTaskIdColumn();
         ensureNotificationTables();
+        ensureCampaignSpecificationTables();
+        ensureCampaignSpecificationColumns();
+        ensureStoreIdContactNumberColumns();
+        // Record V3–V10 in flyway history (idempotent — only inserts missing entries).
+        recordMigrationHistory();
+        // Final safety-net: run Flyway migrate again so any migration that the Spring
+        // autoconfiguration skipped (e.g. due to checksum issues from this runner's
+        // earlier history manipulation) gets applied cleanly on this restart.
+        try {
+            flyway().migrate();
+            log.info("FlywaySchemaRepairRunner: safety-net flyway().migrate() complete.");
+        } catch (Exception e) {
+            log.warn("FlywaySchemaRepairRunner: safety-net migrate failed — {}", e.getMessage());
+        }
     }
 
     private void repairFullWipe() {
@@ -100,52 +115,23 @@ public class FlywaySchemaRepairRunner implements CommandLineRunner {
     }
 
     /**
-     * Idempotent: ensures task_type_id column exists on the campaigns table
-     * and migrates existing requirement_type_id values into it as JSON arrays.
-     * Safe to run on every startup — only touches rows that still need migration.
+     * Idempotent: ensures task_type_id is ABSENT from the campaigns table.
+     * V8 migration drops it via SQL; this Java safety-net handles the case where
+     * Flyway couldn't run V8 (e.g., schema already in repair state).
+     * Also cleans up the legacy requirement_type_id column if it still exists.
      */
-    private void ensureTaskTypeIdColumn() {
+    private void ensureNoTaskTypeIdColumn() {
         try {
-            // 1. Check if the column already exists (compatible with all MySQL versions).
-            Integer colCount = jdbc.queryForObject(
-                "SELECT COUNT(*) FROM information_schema.COLUMNS "
-                + "WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'campaigns' AND COLUMN_NAME = 'task_type_id'",
-                Integer.class);
-            if (colCount == null || colCount == 0) {
-                jdbc.execute(
-                    "ALTER TABLE campaigns ADD COLUMN task_type_id VARCHAR(500) NULL AFTER requirement_type_id");
-                log.info("FlywaySchemaRepairRunner: task_type_id column added to campaigns table.");
-            } else {
-                log.info("FlywaySchemaRepairRunner: task_type_id column already exists on campaigns table.");
+            if (columnExists("campaigns", "task_type_id")) {
+                jdbc.execute("ALTER TABLE campaigns DROP COLUMN task_type_id");
+                log.info("FlywaySchemaRepairRunner: task_type_id column dropped from campaigns table.");
             }
-
-            // 2. For campaigns that already have a plain (non-JSON) task_type_id, wrap it.
-            int wrapped = jdbc.update(
-                "UPDATE campaigns SET task_type_id = JSON_ARRAY(task_type_id) "
-                + "WHERE task_type_id IS NOT NULL AND task_type_id != '' "
-                + "AND LEFT(TRIM(task_type_id), 1) != '['");
-            if (wrapped > 0) log.info("FlywaySchemaRepairRunner: wrapped {} plain task_type_id values into JSON arrays.", wrapped);
-
-            // 3. For campaigns with no task_type_id but with a legacy requirement_type_id,
-            //    copy and wrap requirement_type_id as a JSON array into task_type_id.
-            Integer reqColExists = jdbc.queryForObject(
-                "SELECT COUNT(*) FROM information_schema.COLUMNS "
-                + "WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'campaigns' AND COLUMN_NAME = 'requirement_type_id'",
-                Integer.class);
-            if (reqColExists != null && reqColExists > 0) {
-                int migrated = jdbc.update(
-                    "UPDATE campaigns SET task_type_id = JSON_ARRAY(requirement_type_id) "
-                    + "WHERE (task_type_id IS NULL OR task_type_id = '') "
-                    + "AND requirement_type_id IS NOT NULL AND requirement_type_id != ''");
-                if (migrated > 0) log.info("FlywaySchemaRepairRunner: migrated {} rows from requirement_type_id to task_type_id.", migrated);
-
-                // 4. Now drop the legacy column.
+            if (columnExists("campaigns", "requirement_type_id")) {
                 jdbc.execute("ALTER TABLE campaigns DROP COLUMN requirement_type_id");
-                log.info("FlywaySchemaRepairRunner: requirement_type_id column dropped from campaigns table.");
+                log.info("FlywaySchemaRepairRunner: requirement_type_id legacy column dropped from campaigns table.");
             }
-
         } catch (Exception e) {
-            log.error("FlywaySchemaRepairRunner: task_type_id migration failed — {}", e.getMessage());
+            log.error("FlywaySchemaRepairRunner: ensureNoTaskTypeIdColumn failed — {}", e.getMessage());
         }
     }
 
@@ -284,31 +270,32 @@ public class FlywaySchemaRepairRunner implements CommandLineRunner {
     }
 
     /**
-     * Idempotent: extends the approvals_log.action_taken ENUM to include HELD and UNHOLD.
+     * Idempotent: extends the approvals_log.action_taken ENUM to include HELD, UNHOLD, and CANCELLED.
      * Safe to run every startup — MySQL silently ignores repeated MODIFY when the definition
      * is already correct.
      */
     private void ensureActionDoneByColumn() {
         try {
             jdbc.execute("ALTER TABLE approvals_log MODIFY COLUMN action_taken "
-                + "ENUM('APPROVED','NEEDS_REWORK','REJECTED','REQUESTOR_REWORK','HELD','UNHOLD') NOT NULL");
-            log.info("FlywaySchemaRepairRunner: approvals_log action_taken ENUM extended (HELD/UNHOLD).");
+                + "ENUM('APPROVED','NEEDS_REWORK','REJECTED','REQUESTOR_REWORK','HELD','UNHOLD','CANCELLED') NOT NULL");
+            log.info("FlywaySchemaRepairRunner: approvals_log action_taken ENUM extended (HELD/UNHOLD/CANCELLED).");
         } catch (Exception e) {
             log.error("FlywaySchemaRepairRunner: approvals_log ENUM extension failed — {}", e.getMessage());
         }
     }
 
     /**
-     * Removes flyway_schema_history records whose migration FILES no longer exist
-     * on disk.  V5, V6, and V7 were merged into V1 so their separate files have
-     * been deleted.  V3 and V4 are live SQL files and must NOT be purged.
+     * Removes flyway_schema_history records whose migration FILES no longer exist on disk.
+     * The old V6 (auto_created_tasks) and old V7 (qc_routing) were both folded into V1.
+     * Those file-less entries were previously purged. Now both V6 and V7 are live SQL
+     * files (CampaignSpecifications and CampaignTaskConfig) — do NOT purge them.
+     * V3, V4, V5 are also live SQL files and must NOT be purged.
      */
     private void purgeOrphanedFlywayEntries() {
         try {
-            // V5 – designations/regions timestamps folded into V1.
-            // V6 – auto_created_tasks folded into V1.
-            // V7 – qc_routing folded into V1.
-            String[] orphanedVersions = {"5", "6", "7"};
+            // All previously-orphaned versions (old V6, old V7) have been superseded by
+            // real migration files. Nothing to purge any more.
+            String[] orphanedVersions = {};
             for (String v : orphanedVersions) {
                 int deleted = jdbc.update(
                     "DELETE FROM flyway_schema_history WHERE version = ?", v);
@@ -320,6 +307,52 @@ public class FlywaySchemaRepairRunner implements CommandLineRunner {
             log.warn("FlywaySchemaRepairRunner: could not purge orphaned flyway entries — {}", e.getMessage());
         }
     }
+
+    /**
+     * Ensures V3-V10 have a success=1 row in flyway_schema_history so Flyway
+     * never re-runs them.  Only removes FAILED (success=0) entries; existing
+     * successful rows are left untouched so their checksums stay correct and
+     * Flyway's repair step does not strip them out.
+     */
+    private void recordMigrationHistory() {
+        try {
+            Object[][] migrations = {
+                {"3",  "QcTwoStageApproval",           "V3__QcTwoStageApproval.sql"},
+                {"4",  "NotificationSystem",            "V4__NotificationSystem.sql"},
+                {"5",  "NotificationStatus",            "V5__NotificationStatus.sql"},
+                {"6",  "CampaignSpecifications",        "V6__CampaignSpecifications.sql"},
+                {"7",  "CampaignTaskConfig",            "V7__CampaignTaskConfig.sql"},
+                {"8",  "RemoveTaskTypeIdFromCampaigns", "V8__RemoveTaskTypeIdFromCampaigns.sql"},
+                {"9",  "RemoveCampaignDeliverables",    "V9__RemoveCampaignDeliverables.sql"},
+                {"10", "AddStoreIdContactNumber",       "V10__AddStoreIdContactNumber.sql"},
+            };
+            for (Object[] m : migrations) {
+                String version = (String) m[0];
+                String desc    = (String) m[1];
+                String script  = (String) m[2];
+                // Remove only FAILED entries — never touch a successful row so checksums stay intact
+                jdbc.update("DELETE FROM flyway_schema_history WHERE version = ? AND success = 0", version);
+                Integer alreadyOk = jdbc.queryForObject(
+                    "SELECT COUNT(*) FROM flyway_schema_history WHERE version = ? AND success = 1",
+                    Integer.class, version);
+                if (alreadyOk != null && alreadyOk > 0) {
+                    continue; // already recorded correctly
+                }
+                Integer maxRank = jdbc.queryForObject(
+                    "SELECT COALESCE(MAX(installed_rank), 0) FROM flyway_schema_history", Integer.class);
+                int rank = (maxRank == null ? 0 : maxRank) + 1;
+                jdbc.update(
+                    "INSERT INTO flyway_schema_history "
+                    + "(installed_rank, version, description, type, script, checksum, installed_by, execution_time, success) "
+                    + "VALUES (?, ?, ?, 'SQL', ?, 0, 'java-runner', 1, 1)",
+                    rank, version, desc, script);
+                log.info("FlywaySchemaRepairRunner: recorded V{} ({}) in flyway_schema_history.", version, desc);
+            }
+        } catch (Exception e) {
+            log.warn("FlywaySchemaRepairRunner: recordMigrationHistory failed — {}", e.getMessage());
+        }
+    }
+
 
     /**
      * Creates the auto_created_tasks table if it does not yet exist.
@@ -475,16 +508,40 @@ public class FlywaySchemaRepairRunner implements CommandLineRunner {
 
             jdbc.execute(
                 "CREATE TABLE IF NOT EXISTS notifications ("
-                + "  id         BIGINT        AUTO_INCREMENT PRIMARY KEY,"
-                + "  user_id    BIGINT        NOT NULL,"
-                + "  event_type VARCHAR(100)  NOT NULL,"
-                + "  message    VARCHAR(1000) NOT NULL,"
-                + "  url        VARCHAR(500)  NOT NULL,"
-                + "  is_read    TINYINT(1)    NOT NULL DEFAULT 0,"
-                + "  created_at TIMESTAMP     NOT NULL DEFAULT CURRENT_TIMESTAMP,"
+                + "  id           BIGINT        AUTO_INCREMENT PRIMARY KEY,"
+                + "  user_id      BIGINT        NOT NULL,"
+                + "  event_type   VARCHAR(100)  NOT NULL,"
+                + "  message      VARCHAR(1000) NOT NULL,"
+                + "  url          VARCHAR(500)  NOT NULL,"
+                + "  is_read      TINYINT(1)    NOT NULL DEFAULT 0,"
+                + "  reference_id VARCHAR(50)   NULL,"
+                + "  status       TINYINT(1)    NOT NULL DEFAULT 1,"
+                + "  created_at   TIMESTAMP     NOT NULL DEFAULT CURRENT_TIMESTAMP,"
                 + "  INDEX idx_notifications_user        (user_id),"
-                + "  INDEX idx_notifications_user_unread (user_id, is_read)"
+                + "  INDEX idx_notifications_user_unread (user_id, is_read),"
+                + "  INDEX idx_notif_reference           (reference_id, event_type, status)"
                 + ") ENGINE=InnoDB");
+            // Idempotently add new columns — use columnExists() to avoid IF NOT EXISTS
+            // syntax issues on older MySQL 8.0 patch versions.
+            if (!columnExists("notifications", "reference_id")) {
+                try {
+                    jdbc.execute("ALTER TABLE notifications ADD COLUMN reference_id VARCHAR(50) NULL");
+                    log.info("FlywaySchemaRepairRunner: added reference_id column to notifications.");
+                } catch (Exception e) {
+                    log.error("FlywaySchemaRepairRunner: failed to add reference_id — {}", e.getMessage());
+                }
+            }
+            if (!columnExists("notifications", "status")) {
+                try {
+                    jdbc.execute("ALTER TABLE notifications ADD COLUMN status TINYINT(1) NOT NULL DEFAULT 1");
+                    log.info("FlywaySchemaRepairRunner: added status column to notifications.");
+                } catch (Exception e) {
+                    log.error("FlywaySchemaRepairRunner: failed to add status — {}", e.getMessage());
+                }
+            }
+            log.info("FlywaySchemaRepairRunner: notifications columns → reference_id={}, status={}",
+                columnExists("notifications", "reference_id"),
+                columnExists("notifications", "status"));
 
             // Seed event types
             String[] eventTypes = {
@@ -511,7 +568,25 @@ public class FlywaySchemaRepairRunner implements CommandLineRunner {
                     eventTypes[i], eventTypes[i + 1]);
             }
 
-            // Seed default templates (INSERT IGNORE — uq_template_event_role prevents dupes)
+            // Remove duplicate templates (MySQL UNIQUE allows multiple NULL role_id)
+            jdbc.execute("""
+                    DELETE t1 FROM notification_templates t1
+                    INNER JOIN notification_templates t2
+                      ON t1.event_type = t2.event_type
+                     AND t1.role_id IS NULL
+                     AND t2.role_id IS NULL
+                     AND t1.id > t2.id
+                    """);
+            jdbc.execute("""
+                    DELETE t1 FROM notification_templates t1
+                    INNER JOIN notification_templates t2
+                      ON t1.event_type = t2.event_type
+                     AND t1.role_id = t2.role_id
+                     AND t1.role_id IS NOT NULL
+                     AND t1.id > t2.id
+                    """);
+
+            // Seed default templates only when (event_type, role_id) pair missing
             Object[][] templates = {
                 {"TASK_ASSIGNED",          null, "A new task {taskId} has been assigned to you",                                    "/my-tasks"},
                 {"ADDED_TO_COLLABORATION", null, "{inviterName} added you to collaboration on task {taskId}",                        "/collaborations?taskId={taskId}"},
@@ -532,14 +607,207 @@ public class FlywaySchemaRepairRunner implements CommandLineRunner {
                 {"CONTENT_TASK_AUTO_CLOSED", null, "Your content writing task {taskId} has been marked as complete (designer submitted for QC)",   "/my-tasks"}
             };
             for (Object[] t : templates) {
-                jdbc.update(
-                    "INSERT IGNORE INTO notification_templates (event_type, role_id, message_template, url_template) VALUES (?, ?, ?, ?)",
-                    t[0], t[1], t[2], t[3]);
+                insertNotificationTemplateIfAbsent((String) t[0], (String) t[1], (String) t[2], (String) t[3]);
             }
 
             log.info("FlywaySchemaRepairRunner: notification tables and seed data ensured.");
         } catch (Exception e) {
             log.error("FlywaySchemaRepairRunner: ensureNotificationTables failed — {}", e.getMessage());
+        }
+    }
+
+    /**
+     * V6 — Campaign Specifications lookup tables and hierarchical mapping tables.
+     * Creates all six tables if they do not yet exist and seeds initial data.
+     * Idempotent — CREATE TABLE IF NOT EXISTS + INSERT IGNORE prevent duplicates.
+     */
+    private void ensureCampaignSpecificationTables() {
+        try {
+            // campaign_types
+            jdbc.execute(
+                "CREATE TABLE IF NOT EXISTS campaign_types ("
+                + "  campaign_type_id   VARCHAR(20)               NOT NULL PRIMARY KEY,"
+                + "  campaign_type_name VARCHAR(200)              NOT NULL UNIQUE,"
+                + "  status             ENUM('ACTIVE','INACTIVE') NOT NULL DEFAULT 'ACTIVE',"
+                + "  created_at         TIMESTAMP                 NOT NULL DEFAULT CURRENT_TIMESTAMP,"
+                + "  updated_at         TIMESTAMP                 NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP"
+                + ") ENGINE=InnoDB");
+
+            // business_verticals
+            jdbc.execute(
+                "CREATE TABLE IF NOT EXISTS business_verticals ("
+                + "  business_vertical_id   VARCHAR(20)               NOT NULL PRIMARY KEY,"
+                + "  business_vertical_name VARCHAR(200)              NOT NULL UNIQUE,"
+                + "  status                 ENUM('ACTIVE','INACTIVE') NOT NULL DEFAULT 'ACTIVE',"
+                + "  created_at             TIMESTAMP                 NOT NULL DEFAULT CURRENT_TIMESTAMP,"
+                + "  updated_at             TIMESTAMP                 NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP"
+                + ") ENGINE=InnoDB");
+
+            // business_types
+            jdbc.execute(
+                "CREATE TABLE IF NOT EXISTS business_types ("
+                + "  business_type_id   VARCHAR(20)               NOT NULL PRIMARY KEY,"
+                + "  business_type_name VARCHAR(200)              NOT NULL UNIQUE,"
+                + "  status             ENUM('ACTIVE','INACTIVE') NOT NULL DEFAULT 'ACTIVE',"
+                + "  created_at         TIMESTAMP                 NOT NULL DEFAULT CURRENT_TIMESTAMP,"
+                + "  updated_at         TIMESTAMP                 NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP"
+                + ") ENGINE=InnoDB");
+
+            // store_format_types
+            jdbc.execute(
+                "CREATE TABLE IF NOT EXISTS store_format_types ("
+                + "  store_format_type_id   VARCHAR(20)               NOT NULL PRIMARY KEY,"
+                + "  store_format_type_name VARCHAR(200)              NOT NULL UNIQUE,"
+                + "  status                 ENUM('ACTIVE','INACTIVE') NOT NULL DEFAULT 'ACTIVE',"
+                + "  created_at             TIMESTAMP                 NOT NULL DEFAULT CURRENT_TIMESTAMP,"
+                + "  updated_at             TIMESTAMP                 NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP"
+                + ") ENGINE=InnoDB");
+
+            // business_vertical_business_type_mapping
+            jdbc.execute(
+                "CREATE TABLE IF NOT EXISTS business_vertical_business_type_mapping ("
+                + "  mapping_id           INT         NOT NULL AUTO_INCREMENT PRIMARY KEY,"
+                + "  business_vertical_id VARCHAR(20) NOT NULL,"
+                + "  business_type_id     VARCHAR(20) NOT NULL,"
+                + "  UNIQUE KEY uq_bv_bt (business_vertical_id, business_type_id),"
+                + "  CONSTRAINT fk_bvbt_vertical FOREIGN KEY (business_vertical_id)"
+                + "    REFERENCES business_verticals(business_vertical_id) ON DELETE CASCADE,"
+                + "  CONSTRAINT fk_bvbt_type     FOREIGN KEY (business_type_id)"
+                + "    REFERENCES business_types(business_type_id) ON DELETE CASCADE"
+                + ") ENGINE=InnoDB");
+
+            // business_type_store_format_mapping
+            jdbc.execute(
+                "CREATE TABLE IF NOT EXISTS business_type_store_format_mapping ("
+                + "  mapping_id            INT         NOT NULL AUTO_INCREMENT PRIMARY KEY,"
+                + "  business_type_id      VARCHAR(20) NOT NULL,"
+                + "  store_format_type_id  VARCHAR(20) NOT NULL,"
+                + "  UNIQUE KEY uq_bt_sft (business_type_id, store_format_type_id),"
+                + "  CONSTRAINT fk_btsf_type   FOREIGN KEY (business_type_id)"
+                + "    REFERENCES business_types(business_type_id) ON DELETE CASCADE,"
+                + "  CONSTRAINT fk_btsf_format FOREIGN KEY (store_format_type_id)"
+                + "    REFERENCES store_format_types(store_format_type_id) ON DELETE CASCADE"
+                + ") ENGINE=InnoDB");
+
+            log.info("FlywaySchemaRepairRunner: Campaign Specification tables ensured.");
+
+            // Seed campaign_types
+            jdbc.update("INSERT IGNORE INTO campaign_types (campaign_type_id, campaign_type_name) VALUES ('1','Branding')");
+            jdbc.update("INSERT IGNORE INTO campaign_types (campaign_type_id, campaign_type_name) VALUES ('2','Marketing')");
+
+            // Seed business_verticals
+            jdbc.update("INSERT IGNORE INTO business_verticals (business_vertical_id, business_vertical_name) VALUES ('1','Pharma Retail')");
+            jdbc.update("INSERT IGNORE INTO business_verticals (business_vertical_id, business_vertical_name) VALUES ('2','Diagnostics')");
+            jdbc.update("INSERT IGNORE INTO business_verticals (business_vertical_id, business_vertical_name) VALUES ('3','Opticals')");
+            jdbc.update("INSERT IGNORE INTO business_verticals (business_vertical_id, business_vertical_name) VALUES ('4','Insurance')");
+            jdbc.update("INSERT IGNORE INTO business_verticals (business_vertical_id, business_vertical_name) VALUES ('5','Non-Pharma Retail')");
+
+            // Seed business_types
+            jdbc.update("INSERT IGNORE INTO business_types (business_type_id, business_type_name) VALUES ('1','COCO')");
+            jdbc.update("INSERT IGNORE INTO business_types (business_type_id, business_type_name) VALUES ('2','COFO')");
+            jdbc.update("INSERT IGNORE INTO business_types (business_type_id, business_type_name) VALUES ('3','FOFO')");
+            jdbc.update("INSERT IGNORE INTO business_types (business_type_id, business_type_name) VALUES ('4','Collection Center')");
+            jdbc.update("INSERT IGNORE INTO business_types (business_type_id, business_type_name) VALUES ('5','Diagnostic Center')");
+
+            // Seed store_format_types
+            jdbc.update("INSERT IGNORE INTO store_format_types (store_format_type_id, store_format_type_name) VALUES ('1','Rural')");
+            jdbc.update("INSERT IGNORE INTO store_format_types (store_format_type_id, store_format_type_name) VALUES ('2','Urban Regular')");
+            jdbc.update("INSERT IGNORE INTO store_format_types (store_format_type_id, store_format_type_name) VALUES ('3','Large Format')");
+            jdbc.update("INSERT IGNORE INTO store_format_types (store_format_type_id, store_format_type_name) VALUES ('4','Home Collection')");
+            jdbc.update("INSERT IGNORE INTO store_format_types (store_format_type_id, store_format_type_name) VALUES ('5','Walkin')");
+            jdbc.update("INSERT IGNORE INTO store_format_types (store_format_type_id, store_format_type_name) VALUES ('6','L1')");
+            jdbc.update("INSERT IGNORE INTO store_format_types (store_format_type_id, store_format_type_name) VALUES ('7','L2')");
+            jdbc.update("INSERT IGNORE INTO store_format_types (store_format_type_id, store_format_type_name) VALUES ('8','L3')");
+
+            // Seed business_vertical → business_type mappings
+            // Pharma Retail: COCO, COFO, FOFO
+            jdbc.update("INSERT IGNORE INTO business_vertical_business_type_mapping (business_vertical_id, business_type_id) VALUES ('1','1')");
+            jdbc.update("INSERT IGNORE INTO business_vertical_business_type_mapping (business_vertical_id, business_type_id) VALUES ('1','2')");
+            jdbc.update("INSERT IGNORE INTO business_vertical_business_type_mapping (business_vertical_id, business_type_id) VALUES ('1','3')");
+            // Diagnostics: Collection Center, Diagnostic Center
+            jdbc.update("INSERT IGNORE INTO business_vertical_business_type_mapping (business_vertical_id, business_type_id) VALUES ('2','4')");
+            jdbc.update("INSERT IGNORE INTO business_vertical_business_type_mapping (business_vertical_id, business_type_id) VALUES ('2','5')");
+
+            // Seed business_type → store_format_type mappings
+            // COCO: Rural, Urban Regular, Large Format
+            jdbc.update("INSERT IGNORE INTO business_type_store_format_mapping (business_type_id, store_format_type_id) VALUES ('1','1')");
+            jdbc.update("INSERT IGNORE INTO business_type_store_format_mapping (business_type_id, store_format_type_id) VALUES ('1','2')");
+            jdbc.update("INSERT IGNORE INTO business_type_store_format_mapping (business_type_id, store_format_type_id) VALUES ('1','3')");
+            // Collection Center: Home Collection, Walkin
+            jdbc.update("INSERT IGNORE INTO business_type_store_format_mapping (business_type_id, store_format_type_id) VALUES ('4','4')");
+            jdbc.update("INSERT IGNORE INTO business_type_store_format_mapping (business_type_id, store_format_type_id) VALUES ('4','5')");
+            // Diagnostic Center: L1, L2, L3
+            jdbc.update("INSERT IGNORE INTO business_type_store_format_mapping (business_type_id, store_format_type_id) VALUES ('5','6')");
+            jdbc.update("INSERT IGNORE INTO business_type_store_format_mapping (business_type_id, store_format_type_id) VALUES ('5','7')");
+            jdbc.update("INSERT IGNORE INTO business_type_store_format_mapping (business_type_id, store_format_type_id) VALUES ('5','8')");
+
+            log.info("FlywaySchemaRepairRunner: Campaign Specification seed data ensured.");
+
+            // campaign_task_config — one row per task in a combination
+            jdbc.execute(
+                "CREATE TABLE IF NOT EXISTS campaign_task_config ("
+                + "  id                   BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,"
+                + "  campaign_type_id     VARCHAR(20)               NOT NULL DEFAULT '',"
+                + "  business_vertical_id VARCHAR(20)               NOT NULL DEFAULT '',"
+                + "  business_type_id     VARCHAR(20)               NOT NULL DEFAULT '',"
+                + "  store_format_type_id VARCHAR(20)               NOT NULL DEFAULT '',"
+                + "  granular_task_id     VARCHAR(20)               NOT NULL,"
+                + "  status               ENUM('ACTIVE','INACTIVE') NOT NULL DEFAULT 'ACTIVE',"
+                + "  created_at           TIMESTAMP                 NOT NULL DEFAULT CURRENT_TIMESTAMP,"
+                + "  updated_at           TIMESTAMP                 NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,"
+                + "  UNIQUE KEY uq_ctc (campaign_type_id, business_vertical_id, business_type_id, store_format_type_id, granular_task_id),"
+                + "  CONSTRAINT fk_ctc_task FOREIGN KEY (granular_task_id) REFERENCES granular_tasks(task_id) ON DELETE CASCADE"
+                + ") ENGINE=InnoDB");
+            log.info("FlywaySchemaRepairRunner: campaign_task_config table ensured.");
+
+        } catch (Exception e) {
+            log.error("FlywaySchemaRepairRunner: ensureCampaignSpecificationTables failed — {}", e.getMessage());
+        }
+    }
+
+    /**
+     * V6 — Adds the four Campaign Specification FK columns to the campaigns table.
+     * Uses columnExists() check (compatible with all MySQL 8.0 versions) rather
+     * than ALTER TABLE … ADD COLUMN IF NOT EXISTS which requires MySQL 8.0.3+.
+     */
+    private void ensureCampaignSpecificationColumns() {
+        try {
+            if (!columnExists("campaigns", "campaign_type_id")) {
+                jdbc.execute("ALTER TABLE campaigns ADD COLUMN campaign_type_id VARCHAR(20) NULL");
+                log.info("FlywaySchemaRepairRunner: added campaign_type_id to campaigns.");
+            }
+            if (!columnExists("campaigns", "business_vertical_id")) {
+                jdbc.execute("ALTER TABLE campaigns ADD COLUMN business_vertical_id VARCHAR(20) NULL");
+                log.info("FlywaySchemaRepairRunner: added business_vertical_id to campaigns.");
+            }
+            if (!columnExists("campaigns", "business_type_id")) {
+                jdbc.execute("ALTER TABLE campaigns ADD COLUMN business_type_id VARCHAR(20) NULL");
+                log.info("FlywaySchemaRepairRunner: added business_type_id to campaigns.");
+            }
+            if (!columnExists("campaigns", "store_format_type_id")) {
+                jdbc.execute("ALTER TABLE campaigns ADD COLUMN store_format_type_id VARCHAR(20) NULL");
+                log.info("FlywaySchemaRepairRunner: added store_format_type_id to campaigns.");
+            }
+        } catch (Exception e) {
+            log.error("FlywaySchemaRepairRunner: ensureCampaignSpecificationColumns failed — {}", e.getMessage());
+        }
+    }
+
+    /**
+     * V10 — Adds store_id and contact_number to the campaigns table (idempotent).
+     */
+    private void ensureStoreIdContactNumberColumns() {
+        try {
+            if (!columnExists("campaigns", "store_id")) {
+                jdbc.execute("ALTER TABLE campaigns ADD COLUMN store_id VARCHAR(100) NULL");
+                log.info("FlywaySchemaRepairRunner: added store_id to campaigns.");
+            }
+            if (!columnExists("campaigns", "contact_number")) {
+                jdbc.execute("ALTER TABLE campaigns ADD COLUMN contact_number VARCHAR(20) NULL");
+                log.info("FlywaySchemaRepairRunner: added contact_number to campaigns.");
+            }
+        } catch (Exception e) {
+            log.error("FlywaySchemaRepairRunner: ensureStoreIdContactNumberColumns failed — {}", e.getMessage());
         }
     }
 
@@ -559,6 +827,25 @@ public class FlywaySchemaRepairRunner implements CommandLineRunner {
                         + "WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ?",
                 Integer.class, tableName);
         return n != null && n > 0;
+    }
+
+    /**
+     * Inserts a notification template only if no row exists for the same event_type + role_id.
+     * Uses null-safe match because MySQL UNIQUE allows multiple NULL role_id values.
+     */
+    private void insertNotificationTemplateIfAbsent(String eventType, String roleId,
+                                                    String messageTemplate, String urlTemplate) {
+        Integer exists = jdbc.queryForObject("""
+                SELECT COUNT(*) FROM notification_templates
+                 WHERE event_type = ?
+                   AND ((? IS NULL AND role_id IS NULL) OR role_id = ?)
+                """, Integer.class, eventType, roleId, roleId);
+        if (exists != null && exists > 0) {
+            return;
+        }
+        jdbc.update(
+                "INSERT INTO notification_templates (event_type, role_id, message_template, url_template) VALUES (?, ?, ?, ?)",
+                eventType, roleId, messageTemplate, urlTemplate);
     }
 
     private boolean columnExists(String tableName, String columnName) {

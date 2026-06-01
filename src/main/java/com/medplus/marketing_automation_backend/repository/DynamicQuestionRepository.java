@@ -98,17 +98,42 @@ public class DynamicQuestionRepository {
     }
 
     /** Paged + filtered questions with task mappings for the admin Question Library table. */
-    public PagedResponse<Map<String, Object>> findAllWithMappingsPaged(String questionText,
+    public PagedResponse<Map<String, Object>> findAllWithMappingsPaged(String questionId,
+                                                                         String questionText,
+                                                                         String fieldType,
+                                                                         Boolean required,
+                                                                         String granularTaskId,
                                                                          int page, int size) {
         MapSqlParameterSource params = new MapSqlParameterSource();
-        List<String> havingConds = new ArrayList<>();
+        List<String> whereConds = new ArrayList<>();
 
+        if (questionId != null && !questionId.isBlank()) {
+            whereConds.add("dq.question_id LIKE :questionId");
+            params.addValue("questionId", "%" + questionId.trim() + "%");
+        }
         if (questionText != null && !questionText.isBlank()) {
-            havingConds.add("question_text LIKE :questionText");
+            whereConds.add("dq.question_text LIKE :questionText");
             params.addValue("questionText", "%" + questionText.trim() + "%");
         }
+        if (fieldType != null && !fieldType.isBlank()) {
+            whereConds.add("dq.field_type = :fieldType");
+            params.addValue("fieldType", fieldType.trim().toUpperCase());
+        }
+        if (required != null) {
+            whereConds.add("dq.is_required = :required");
+            params.addValue("required", required ? 1 : 0);
+        }
+        if (granularTaskId != null && !granularTaskId.isBlank()) {
+            whereConds.add("""
+                    EXISTS (
+                      SELECT 1 FROM task_question_mapping tqm_f
+                       WHERE tqm_f.question_id = dq.question_id
+                         AND tqm_f.granular_task_id = :granularTaskId
+                    )""");
+            params.addValue("granularTaskId", granularTaskId.trim());
+        }
 
-        String having = havingConds.isEmpty() ? "" : " HAVING " + String.join(" AND ", havingConds);
+        String where = whereConds.isEmpty() ? "" : " WHERE " + String.join(" AND ", whereConds);
 
         String baseSql = """
                 SELECT dq.question_id,
@@ -121,8 +146,9 @@ public class DynamicQuestionRepository {
                   FROM dynamic_questions dq
                   LEFT JOIN task_question_mapping tqm ON tqm.question_id    = dq.question_id
                   LEFT JOIN granular_tasks        gt  ON gt.task_id         = tqm.granular_task_id
+                """ + where + """
                  GROUP BY dq.question_id, dq.question_text, dq.field_type, dq.options, dq.is_required
-                """ + having;
+                """;
 
         Long total = jdbc.queryForObject(
                 "SELECT COUNT(*) FROM (" + baseSql + ") AS counted",

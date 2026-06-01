@@ -16,18 +16,26 @@ public class Campaign {
     private Integer requestorId;
     private String  requestorName;
 
-    // Section 1
+    // Section 1 – Campaign Specifications
     private String departmentId;
     private String departmentName;
     private String targetLocation;
     private String businessObjectiveId;   // raw stored ID, for edit-form pre-population
     private String businessObjective;     // resolved display name, e.g. "Lead Generation"
+    private String campaignTypeId;
+    private String campaignTypeName;
+    private String businessVerticalId;
+    private String businessVerticalName;
+    private String businessTypeId;
+    private String businessTypeName;
+    private String storeFormatTypeId;
+    private String storeFormatTypeName;
 
-    // Section 2 — Task Type (JSON array of task_type IDs, resolved at service layer)
-    private String taskTypeId;
-    private String taskTypeName;
+    // Section 1b — Store & Contact details
+    private String storeId;
+    private String contactNumber;
 
-    // Section 3 — comma-separated names for multi-select
+    // Section 2 — comma-separated names for multi-select
     private String audienceTypeId;        // e.g. "Retail Customers,Franchise Owners"
     private String language;              // e.g. "English,Hindi"
 
@@ -75,4 +83,5 @@ public class Campaign {
     private Integer completedTaskCount;
     private Boolean hasRework;
     private Boolean hasQcReview;
+    private Boolean hasUnansweredComments;
 }

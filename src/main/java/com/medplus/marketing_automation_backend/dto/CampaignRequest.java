@@ -10,13 +10,19 @@ import java.util.List;
 @Data
 public class CampaignRequest {
 
-    // Section 1 – Requestor Details
+    // Section 1 – Campaign Specifications
     private String departmentId;
     private String targetLocation;
     private String businessObjective;     // master item ID, or free-text if "Other"
+    private String campaignTypeId;
+    private String businessVerticalId;
+    private String businessTypeId;
+    private String storeFormatTypeId;
 
-    // Section 2 – Task Type (multi-select, sent as List<String>)
-    private List<String> taskTypeId;
+    private String storeId;
+
+    @NotBlank(message = "Contact Number is required")
+    private String contactNumber;
 
     // Section 3 – Audience (JSON array of IDs; free-text appended for "Other")
     private List<String> audienceTypeId;  // e.g. ["1","2"] or ["1","Custom Audience"]

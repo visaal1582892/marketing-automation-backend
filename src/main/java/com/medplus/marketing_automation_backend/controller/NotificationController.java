@@ -58,10 +58,25 @@ public class NotificationController {
 
     // ── Admin: template management ────────────────────────────────────────────
 
-    /** Returns all notification templates (Admin / Marketing Manager only). */
+    /**
+     * List notification templates (Admin / Marketing Manager only).
+     * Without page/size: full list. With page/size: PagedResponse for admin table.
+     */
     @GetMapping("/templates")
     @PreAuthorize("hasAnyRole('ADMIN','MARKETING_MANAGER')")
-    public List<NotificationTemplate> getTemplates() {
+    public Object getTemplates(@RequestParam(required = false) String id,
+                               @RequestParam(required = false) String eventType,
+                               @RequestParam(required = false) String appliesTo,
+                               @RequestParam(required = false) String message,
+                               @RequestParam(required = false) String url,
+                               @RequestParam(required = false) Integer page,
+                               @RequestParam(required = false) Integer size) {
+        if (page != null || size != null) {
+            return notificationService.getTemplatesPaged(
+                    id, eventType, appliesTo, message, url,
+                    page != null ? page : 0,
+                    size != null ? size : 20);
+        }
         return notificationService.getAllTemplates();
     }
 

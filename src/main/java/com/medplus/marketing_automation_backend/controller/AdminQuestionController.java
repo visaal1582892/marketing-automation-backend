@@ -41,12 +41,17 @@ public class AdminQuestionController {
      * With page/size: returns PagedResponse for the admin Question Library table.
      */
     @GetMapping
-    public Object listAll(@RequestParam(required = false) String questionText,
+    public Object listAll(@RequestParam(required = false) String questionId,
+                          @RequestParam(required = false) String questionText,
+                          @RequestParam(required = false) String fieldType,
+                          @RequestParam(required = false) Boolean required,
+                          @RequestParam(required = false) String granularTaskId,
                           @RequestParam(required = false) Integer page,
                           @RequestParam(required = false) Integer size) {
         if (page != null || size != null) {
             PagedResponse<Map<String, Object>> paged = questionRepo.findAllWithMappingsPaged(
-                    questionText, page != null ? page : 0, size != null ? size : 20);
+                    questionId, questionText, fieldType, required, granularTaskId,
+                    page != null ? page : 0, size != null ? size : 20);
             List<QuestionResponse> content = paged.content().stream()
                     .map(this::toResponse).toList();
             return PagedResponse.of(content, paged.totalElements(), paged.page(), paged.size());

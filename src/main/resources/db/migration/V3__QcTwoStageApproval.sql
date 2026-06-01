@@ -24,10 +24,12 @@ ALTER TABLE work_tasks
 -- Migrate any legacy QC_REVIEW rows
 UPDATE work_tasks SET status = 'MANAGER_QC_REVIEW' WHERE status = 'QC_REVIEW';
 
--- Add manager_approved_at if missing (MySQL 8.0+ IF NOT EXISTS syntax)
+-- Add manager_approved_at and requestor_approved_at.
+-- On a clean database these columns do not yet exist (V1 predates this feature).
+-- Flyway prevents this script from running twice, so IF NOT EXISTS is not needed
+-- (and is not valid MySQL 8.0 syntax — it is MariaDB-only).
 ALTER TABLE work_tasks
-    ADD COLUMN IF NOT EXISTS manager_approved_at DATETIME NULL DEFAULT NULL;
+    ADD COLUMN manager_approved_at DATETIME NULL DEFAULT NULL;
 
--- Add requestor_approved_at if missing
 ALTER TABLE work_tasks
-    ADD COLUMN IF NOT EXISTS requestor_approved_at DATETIME NULL DEFAULT NULL;
+    ADD COLUMN requestor_approved_at DATETIME NULL DEFAULT NULL;

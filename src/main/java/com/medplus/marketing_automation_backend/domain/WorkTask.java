@@ -80,6 +80,9 @@ public class WorkTask {
     private LocalDate      campaignDeadline;
     private Priority       campaignPriority;
     private String         requestorName;
+    private String         storeId;
+    private String         contactNumber;
+    private boolean        hasActiveComments;
     /** Name of whoever performed the most recent approvals_log action; null for old tasks with no log. */
     private String         latestActionDoneByName;
     private CampaignStatus campaignStatus;

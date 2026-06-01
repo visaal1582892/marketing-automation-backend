@@ -2,15 +2,16 @@ package com.medplus.marketing_automation_backend.dto;
 
 import lombok.*;
 
-/** Read-only view of a campaign_deliverables row, enriched with names. */
+/** Read-only view of a work task deliverable for the campaign brief. */
 @Data
 @Builder
 @NoArgsConstructor
 @AllArgsConstructor
 public class DeliverableResponse {
-    private Integer specId;
+    /** Work task ID, e.g. "WORK-TASK-273". */
+    private String  taskId;
     private String  granularTaskId;
     private String  granularTaskName;
-    /** Status of the linked work_task, e.g. ASSIGNED, HELD, IN_PROGRESS. Null if not yet routed. */
+    /** Current task status, e.g. ASSIGNED, HELD, IN_PROGRESS. */
     private String  workTaskStatus;
 }

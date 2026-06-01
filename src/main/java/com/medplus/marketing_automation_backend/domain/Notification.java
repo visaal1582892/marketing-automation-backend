@@ -19,5 +19,7 @@ public class Notification {
     private String        message;
     private String        url;
     private boolean       read;
+    private String        referenceId;
+    private boolean       active;   // true = action not yet taken; false = resolved
     private LocalDateTime createdAt;
 }

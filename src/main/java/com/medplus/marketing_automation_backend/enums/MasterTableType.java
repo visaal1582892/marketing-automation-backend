@@ -26,7 +26,11 @@ public enum MasterTableType {
     SUPPORTING_PROOFS  ("supporting_proofs",   "/supporting-proofs",    "supporting_proof_id",   "supporting_proof_name"),
     BUDGET_TIERS       ("budget_tiers",        "/budget-tiers",         "budget_tier_id",        "budget_tier_name"),
     KPI_TYPES          ("kpi_types",           "/kpi-types",            "kpi_type_id",           "kpi_type_name"),
-    EXPECTED_OUTPUTS   ("expected_outputs",    "/expected-outputs",     "expected_output_id",    "expected_output_name");
+    EXPECTED_OUTPUTS   ("expected_outputs",    "/expected-outputs",     "expected_output_id",    "expected_output_name"),
+    CAMPAIGN_TYPES     ("campaign_types",      "/campaign-types",       "campaign_type_id",      "campaign_type_name"),
+    BUSINESS_VERTICALS ("business_verticals",  "/business-verticals",   "business_vertical_id",  "business_vertical_name"),
+    BUSINESS_TYPES     ("business_types",      "/business-types",       "business_type_id",      "business_type_name"),
+    STORE_FORMAT_TYPES ("store_format_types",  "/store-format-types",   "store_format_type_id",  "store_format_type_name");
 
     private final String tableName;
     private final String pathSlug;

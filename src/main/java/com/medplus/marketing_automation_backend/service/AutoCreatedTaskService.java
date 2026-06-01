@@ -236,6 +236,35 @@ public class AutoCreatedTaskService {
      * Also decrements the content writer's active-task counter and deactivates
      * the collaboration session so no further uploads are accepted.
      */
+    /**
+     * When a designer source task is cancelled or rejected, auto-cancel its linked
+     * content task if still open (ASSIGNED, IN_PROGRESS, or REWORK).
+     */
+    @Transactional
+    public void cancelLinkedContentTaskOnSourceCancelledOrRejected(String sourceTaskId, String reason) {
+        autoCreatedTaskRepo.findBySourceTaskId(sourceTaskId).ifPresent(link -> {
+            String contentTaskId = link.getCreatedTaskId();
+            WorkTask child = workTaskRepo.findById(contentTaskId).orElse(null);
+            if (child == null) return;
+
+            TaskStatus status = child.getStatus();
+            if (status != TaskStatus.ASSIGNED
+                    && status != TaskStatus.IN_PROGRESS
+                    && status != TaskStatus.REWORK) {
+                return;
+            }
+
+            workTaskRepo.markCancelled(contentTaskId);
+            if (child.getAssignedTo() != null) {
+                userRepo.decrementActiveTasks(child.getAssignedTo().longValue());
+                eventPublisher.publishEvent(
+                        new TaskCancelledEvent(contentTaskId, reason, child.getAssignedTo()));
+            }
+            workTaskRepo.deactivateCollaboration(contentTaskId);
+            autoCreatedTaskRepo.updateStatus(link.getAutoCreatedTaskId(), "CANCELLED");
+        });
+    }
+
     @Transactional
     public void closeLinkedContentTaskOnSourceQcSubmit(String sourceTaskId) {
         autoCreatedTaskRepo.findBySourceTaskId(sourceTaskId).ifPresent(link -> {

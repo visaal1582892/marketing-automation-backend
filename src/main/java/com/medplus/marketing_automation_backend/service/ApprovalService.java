@@ -32,22 +32,28 @@ import java.util.Map;
 @Service
 public class ApprovalService {
 
-    private final WorkTaskRepository     workTaskRepo;
-    private final ApprovalLogRepository  approvalLogRepo;
-    private final CampaignRepository     campaignRepo;
-    private final UserRepository         userRepo;
+    private final WorkTaskRepository        workTaskRepo;
+    private final ApprovalLogRepository     approvalLogRepo;
+    private final CampaignRepository        campaignRepo;
+    private final UserRepository            userRepo;
     private final ApplicationEventPublisher eventPublisher;
+    private final NotificationService       notificationService;
+    private final AutoCreatedTaskService    autoCreatedTaskService;
 
     public ApprovalService(WorkTaskRepository workTaskRepo,
                            ApprovalLogRepository approvalLogRepo,
                            CampaignRepository campaignRepo,
                            UserRepository userRepo,
-                           ApplicationEventPublisher eventPublisher) {
-        this.workTaskRepo    = workTaskRepo;
-        this.approvalLogRepo = approvalLogRepo;
-        this.campaignRepo    = campaignRepo;
-        this.userRepo        = userRepo;
-        this.eventPublisher  = eventPublisher;
+                           ApplicationEventPublisher eventPublisher,
+                           NotificationService notificationService,
+                           AutoCreatedTaskService autoCreatedTaskService) {
+        this.workTaskRepo       = workTaskRepo;
+        this.approvalLogRepo    = approvalLogRepo;
+        this.campaignRepo       = campaignRepo;
+        this.userRepo           = userRepo;
+        this.eventPublisher     = eventPublisher;
+        this.notificationService = notificationService;
+        this.autoCreatedTaskService = autoCreatedTaskService;
     }
 
     // -------------------------------------------------------------------------
@@ -116,29 +122,29 @@ public class ApprovalService {
                 if (workerId > 0) {
                     eventPublisher.publishEvent(new ManagerQcApprovedEvent(taskId, managerName, workerId, requestorId));
                 }
+                // Manager acted on QC — resolve SUBMITTED_FOR_QC notification
+                notificationService.resolveNotifications(taskId, "SUBMITTED_FOR_QC");
             }
             case NEEDS_REWORK -> {
                 workTaskRepo.markRework(taskId);
-                // Do NOT auto-sync the linked content task here.
-                // The designer decides whether to send the content task for rework
-                // by explicitly clicking "Content Rework". Doing it automatically
-                // caused the content task to flip to REWORK on every QC rejection
-                // without the designer's intent.
-                workTaskRepo.activateCollaboration(taskId); // REWORK = task back to worker → re-activate
+                workTaskRepo.activateCollaboration(taskId);
                 log.info("QC NEEDS_REWORK | taskId={} campaignId={} comment={}",
                         taskId, task.getCampaignId(), req.getComments());
                 if (task.getAssignedTo() != null) {
                     String managerName = reviewer.getFullName() != null ? reviewer.getFullName() : "Manager";
                     eventPublisher.publishEvent(new ManagerReworkEvent(taskId, managerName, task.getAssignedTo()));
                 }
+                // Manager acted on QC — resolve SUBMITTED_FOR_QC notification
+                notificationService.resolveNotifications(taskId, "SUBMITTED_FOR_QC");
             }
             case REJECTED -> {
                 workTaskRepo.markRejected(taskId);
+                autoCreatedTaskService.cancelLinkedContentTaskOnSourceCancelledOrRejected(
+                        taskId, "System (Source task rejected)");
                 if (task.getAssignedTo() != null) {
                     userRepo.decrementActiveTasks(task.getAssignedTo().longValue());
                 }
                 cancelSiblingTasksAndRefreshCounters(task.getCampaignId(), task.getTaskId());
-                // Sibling cancellations share the same second; bump the rejected row last.
                 workTaskRepo.touchUpdatedAt(taskId);
                 campaignRepo.updateStatusAndNotes(task.getCampaignId(), CampaignStatus.REJECTED,
                         "Rejected by reviewer: " + (req.getComments() != null ? req.getComments() : ""));
@@ -148,6 +154,8 @@ public class ApprovalService {
                     String managerName = reviewer.getFullName() != null ? reviewer.getFullName() : "Manager";
                     eventPublisher.publishEvent(new ManagerRejectEvent(taskId, managerName, task.getAssignedTo()));
                 }
+                // Manager acted on QC — resolve SUBMITTED_FOR_QC notification
+                notificationService.resolveNotifications(taskId, "SUBMITTED_FOR_QC");
             }
         }
 
@@ -167,6 +175,10 @@ public class ApprovalService {
             Object tid = row.get("task_id");
             Object uid = row.get("assigned_to");
             if (tid != null && tid.toString().equals(excludingTaskId)) continue;
+            if (tid != null) {
+                autoCreatedTaskService.cancelLinkedContentTaskOnSourceCancelledOrRejected(
+                        tid.toString(), "System (Source task cancelled)");
+            }
             if (uid != null) {
                 userRepo.decrementActiveTasks(((Number) uid).longValue());
             }
@@ -230,6 +242,8 @@ public class ApprovalService {
             String requestorName = requestor.getFullName() != null ? requestor.getFullName() : "Requestor";
             eventPublisher.publishEvent(new RequestorQcApprovedEvent(taskId, requestorName, task.getAssignedTo()));
         }
+        // Requestor acted — resolve MANAGER_QC_APPROVAL notification
+        notificationService.resolveNotifications(taskId, "MANAGER_QC_APPROVAL");
 
         return CampaignService.toWorkTaskResponse(
                 workTaskRepo.findById(taskId).orElseThrow());
@@ -323,6 +337,9 @@ public class ApprovalService {
             campaignRepo.updateStatus(campaignId, CampaignStatus.IN_PROGRESS);
             log.info("REQUESTOR rework — campaign re-opened | campaignId={}", campaignId);
         }
+
+        // Requestor acted — resolve MANAGER_QC_APPROVAL notification
+        notificationService.resolveNotifications(taskId, "MANAGER_QC_APPROVAL");
 
         log.info("REQUESTOR rework submitted | campaignId={} taskId={} message={}",
                 campaignId, taskId, message);

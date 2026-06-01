@@ -1,7 +1,6 @@
 package com.medplus.marketing_automation_backend.repository;
 
 import com.medplus.marketing_automation_backend.domain.Campaign;
-import com.medplus.marketing_automation_backend.domain.CampaignDeliverable;
 import com.medplus.marketing_automation_backend.dto.PagedResponse;
 import com.medplus.marketing_automation_backend.enums.CampaignStatus;
 import com.medplus.marketing_automation_backend.enums.Priority;
@@ -31,7 +30,9 @@ public class CampaignRepository {
     private static final String SELECT_BASE = """
             SELECT c.campaign_id, c.requestor_id, c.department_id, c.target_location,
                    c.business_objective,
-                   c.task_type_id,
+                   c.campaign_type_id, c.business_vertical_id,
+                   c.business_type_id, c.store_format_type_id,
+                   c.store_id, c.contact_number,
                    c.audience_type_id, c.language,
                    c.has_offer, c.offer_type_id, c.key_message, c.supporting_proof,
                    c.tone, c.priority,
@@ -49,10 +50,15 @@ public class CampaignRepository {
                    COALESCE(kt.kpi_type_name,     c.kpi_type)                     AS kpi_type_resolved,
                    COALESCE(eo.expected_output_name, c.expected_output)           AS expected_output_resolved,
                    COALESCE(bo.business_objective_name, c.business_objective)     AS business_objective_resolved,
+                   ct.campaign_type_name,
+                   bv.business_vertical_name,
+                   bt.business_type_name,
+                   sft.store_format_type_name,
                    (SELECT COUNT(*) FROM work_tasks wt WHERE wt.campaign_id = c.campaign_id AND wt.status <> 'CANCELLED') AS task_count,
                    (SELECT COUNT(*) FROM work_tasks wt WHERE wt.campaign_id = c.campaign_id AND wt.status = 'COMPLETED')  AS completed_task_count,
                    (SELECT COUNT(*) > 0 FROM work_tasks wt WHERE wt.campaign_id = c.campaign_id AND wt.status = 'REWORK')    AS has_rework,
-                   (SELECT COUNT(*) > 0 FROM work_tasks wt WHERE wt.campaign_id = c.campaign_id AND wt.status IN ('MANAGER_QC_REVIEW','REQUESTOR_QC_REVIEW')) AS has_qc_review
+                   (SELECT COUNT(*) > 0 FROM work_tasks wt WHERE wt.campaign_id = c.campaign_id AND wt.status IN ('MANAGER_QC_REVIEW','REQUESTOR_QC_REVIEW')) AS has_qc_review,
+                   (SELECT COUNT(*) > 0 FROM worker_comments wc JOIN work_tasks wt ON wt.task_id = wc.task_id WHERE wt.campaign_id = c.campaign_id AND wc.is_answered = 0) AS has_unanswered_comments
             FROM campaigns c
             LEFT JOIN users               u   ON u.user_id   = c.requestor_id
             LEFT JOIN departments         d   ON d.department_id = c.department_id
@@ -62,6 +68,10 @@ public class CampaignRepository {
             LEFT JOIN kpi_types           kt  ON kt.kpi_type_id           = c.kpi_type
             LEFT JOIN expected_outputs    eo  ON eo.expected_output_id    = c.expected_output
             LEFT JOIN business_objectives bo  ON bo.business_objective_id = c.business_objective
+            LEFT JOIN campaign_types      ct  ON ct.campaign_type_id      = c.campaign_type_id
+            LEFT JOIN business_verticals  bv  ON bv.business_vertical_id  = c.business_vertical_id
+            LEFT JOIN business_types      bt  ON bt.business_type_id      = c.business_type_id
+            LEFT JOIN store_format_types  sft ON sft.store_format_type_id = c.store_format_type_id
             """;
 
     // -------------------------------------------------------------------------
@@ -72,7 +82,9 @@ public class CampaignRepository {
         String sql = """
                 INSERT INTO campaigns (
                     requestor_id, department_id, target_location, business_objective,
-                    task_type_id, audience_type_id, language,
+                    campaign_type_id, business_vertical_id, business_type_id, store_format_type_id,
+                    store_id, contact_number,
+                    audience_type_id, language,
                     has_offer, offer_type_id, key_message, supporting_proof,
                     tone, priority,
                     budget_tier, vendor_required, vendor_type,
@@ -80,7 +92,9 @@ public class CampaignRepository {
                     flagged_inconsistency, inconsistency_reason
                 ) VALUES (
                     :requestorId, :departmentId, :targetLocation, :businessObjective,
-                    :taskTypeId, :audienceTypeId, :language,
+                    :campaignTypeId, :businessVerticalId, :businessTypeId, :storeFormatTypeId,
+                    :storeId, :contactNumber,
+                    :audienceTypeId, :language,
                     :hasOffer, :offerTypeId, :keyMessage, :supportingProof,
                     :tone, :priority,
                     :budgetTier, :vendorRequired, :vendorType,
@@ -93,7 +107,12 @@ public class CampaignRepository {
                 .addValue("departmentId",         c.getDepartmentId())
                 .addValue("targetLocation",       c.getTargetLocation())
                 .addValue("businessObjective",    c.getBusinessObjective())
-                .addValue("taskTypeId",           c.getTaskTypeId())
+                .addValue("campaignTypeId",       c.getCampaignTypeId())
+                .addValue("businessVerticalId",   c.getBusinessVerticalId())
+                .addValue("businessTypeId",       c.getBusinessTypeId())
+                .addValue("storeFormatTypeId",    c.getStoreFormatTypeId())
+                .addValue("storeId",              c.getStoreId())
+                .addValue("contactNumber",        c.getContactNumber())
                 .addValue("audienceTypeId",       c.getAudienceTypeId())
                 .addValue("language",             c.getLanguage())
                 .addValue("hasOffer",             c.getHasOffer() == null ? "NO" : c.getHasOffer())
@@ -226,7 +245,7 @@ public class CampaignRepository {
     public int updateRequestorFields(int campaignId,
                                      String departmentId, String targetLocation,
                                      String businessObjective,
-                                     String taskTypeId,
+                                     String storeId, String contactNumber,
                                      String audienceTypeId, String language,
                                      String hasOffer, String offerTypeId,
                                      String keyMessage, String supportingProof,
@@ -240,7 +259,8 @@ public class CampaignRepository {
                    SET department_id         = :deptId,
                        target_location       = :targetLocation,
                        business_objective    = :businessObjective,
-                       task_type_id          = :taskTypeId,
+                       store_id              = :storeId,
+                       contact_number        = :contactNumber,
                        audience_type_id      = :audienceTypeId,
                        language              = :language,
                        has_offer             = :hasOffer,
@@ -263,7 +283,8 @@ public class CampaignRepository {
                         .addValue("deptId",             departmentId)
                         .addValue("targetLocation",     targetLocation)
                         .addValue("businessObjective",  businessObjective)
-                        .addValue("taskTypeId",         taskTypeId)
+                        .addValue("storeId",            storeId)
+                        .addValue("contactNumber",      contactNumber)
                         .addValue("audienceTypeId",     audienceTypeId)
                         .addValue("language",           language)
                         .addValue("hasOffer",           hasOffer)
@@ -280,63 +301,6 @@ public class CampaignRepository {
                         .addValue("flagged",            flagged)
                         .addValue("reason",             inconsistencyReason)
                         .addValue("id",                 campaignId));
-    }
-
-    // -------------------------------------------------------------------------
-    // Campaign Deliverables (per-task specs from Smart Form)
-    // -------------------------------------------------------------------------
-
-    public void insertDeliverable(int campaignId, String granularTaskId) {
-        jdbc.update("""
-                INSERT IGNORE INTO campaign_deliverables
-                    (campaign_id, granular_task_id)
-                VALUES (:campaignId, :taskId)
-                """,
-                new MapSqlParameterSource()
-                        .addValue("campaignId",  campaignId)
-                        .addValue("taskId",      granularTaskId));
-    }
-
-    public List<CampaignDeliverable> findDeliverablesByCampaignId(int campaignId) {
-        return jdbc.query("""
-                SELECT cd.spec_id, cd.campaign_id, cd.granular_task_id,
-                       gt.task_name AS granular_task_name
-                FROM   campaign_deliverables cd
-                LEFT JOIN granular_tasks gt ON gt.task_id = cd.granular_task_id
-                WHERE  cd.campaign_id = :id
-                ORDER  BY cd.spec_id
-                """,
-                new MapSqlParameterSource("id", campaignId),
-                (rs, n) -> CampaignDeliverable.builder()
-                        .specId(rs.getInt("spec_id"))
-                        .campaignId(rs.getInt("campaign_id"))
-                        .granularTaskId(rs.getString("granular_task_id"))
-                        .granularTaskName(rs.getString("granular_task_name"))
-                        .build());
-    }
-
-    public Optional<CampaignDeliverable> findDeliverableBySpecId(int specId) {
-        List<CampaignDeliverable> rows = jdbc.query("""
-                SELECT cd.spec_id, cd.campaign_id, cd.granular_task_id,
-                       gt.task_name AS granular_task_name
-                FROM   campaign_deliverables cd
-                LEFT JOIN granular_tasks gt ON gt.task_id = cd.granular_task_id
-                WHERE  cd.spec_id = :specId
-                """,
-                new MapSqlParameterSource("specId", specId),
-                (rs, n) -> CampaignDeliverable.builder()
-                        .specId(rs.getInt("spec_id"))
-                        .campaignId(rs.getInt("campaign_id"))
-                        .granularTaskId(rs.getString("granular_task_id"))
-                        .granularTaskName(rs.getString("granular_task_name"))
-                        .build());
-        return rows.isEmpty() ? Optional.empty() : Optional.of(rows.get(0));
-    }
-
-    public int deleteDeliverableBySpecId(int specId) {
-        return jdbc.update(
-                "DELETE FROM campaign_deliverables WHERE spec_id = :specId",
-                new MapSqlParameterSource("specId", specId));
     }
 
     // -------------------------------------------------------------------------
@@ -455,20 +419,14 @@ public class CampaignRepository {
             params.addValue("priority", priority.trim());
         }
         if (taskType != null && !taskType.isBlank()) {
-            // Match campaigns whose primary task type OR any deliverable's task type equals the selected name
+            // Match campaigns that have at least one work task whose granular task belongs to the selected task type
             conds.add("""
                     EXISTS (
                         SELECT 1 FROM task_types tt
-                        WHERE tt.task_name = :taskType
-                        AND (
-                            tt.task_type_id = c.task_type_id
-                            OR EXISTS (
-                                SELECT 1 FROM campaign_deliverables cd
-                                JOIN granular_tasks gt ON gt.task_id = cd.granular_task_id
-                                WHERE gt.task_type_id = tt.task_type_id
-                                AND cd.campaign_id = c.campaign_id
-                            )
-                        )
+                        JOIN granular_tasks gt ON gt.task_type_id = tt.task_type_id
+                        JOIN work_tasks wt ON wt.granular_task_id = gt.task_id
+                        WHERE tt.task_name = :taskType AND wt.campaign_id = c.campaign_id
+                              AND wt.status <> 'CANCELLED'
                     )""");
             params.addValue("taskType", taskType.trim());
         }
@@ -509,7 +467,16 @@ public class CampaignRepository {
                 .targetLocation(rs.getString("target_location"))
                 .businessObjectiveId(rs.getString("business_objective"))
                 .businessObjective(rs.getString("business_objective_resolved"))
-                .taskTypeId(rs.getString("task_type_id"))
+                .campaignTypeId(rs.getString("campaign_type_id"))
+                .campaignTypeName(rs.getString("campaign_type_name"))
+                .businessVerticalId(rs.getString("business_vertical_id"))
+                .businessVerticalName(rs.getString("business_vertical_name"))
+                .businessTypeId(rs.getString("business_type_id"))
+                .businessTypeName(rs.getString("business_type_name"))
+                .storeFormatTypeId(rs.getString("store_format_type_id"))
+                .storeFormatTypeName(rs.getString("store_format_type_name"))
+                .storeId(rs.getString("store_id"))
+                .contactNumber(rs.getString("contact_number"))
                 .audienceTypeId(rs.getString("audience_type_id"))
                 .language(rs.getString("language"))
                 .hasOffer(rs.getString("has_offer"))
@@ -539,6 +506,7 @@ public class CampaignRepository {
                 .completedTaskCount(readNullableInt(rs, "completed_task_count"))
                 .hasRework(readBoolean(rs, "has_rework"))
                 .hasQcReview(readBoolean(rs, "has_qc_review"))
+                .hasUnansweredComments(readBoolean(rs, "has_unanswered_comments"))
                 .build();
     }
 

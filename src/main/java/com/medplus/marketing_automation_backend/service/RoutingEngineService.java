@@ -1,7 +1,6 @@
 package com.medplus.marketing_automation_backend.service;
 
 import com.medplus.marketing_automation_backend.domain.Campaign;
-import com.medplus.marketing_automation_backend.domain.CampaignDeliverable;
 import com.medplus.marketing_automation_backend.domain.RoleTask;
 import com.medplus.marketing_automation_backend.domain.User;
 import com.medplus.marketing_automation_backend.domain.WorkTask;
@@ -69,31 +68,22 @@ public class RoutingEngineService {
     }
 
     // -------------------------------------------------------------------------
-    // Public entry — called on campaign creation to auto-route deliverables.
+    // Public entry — called on campaign creation / task additions to route tasks.
     // -------------------------------------------------------------------------
 
     /**
-     * Creates one work_task per un-routed deliverable for the campaign.
+     * Creates one work_task per granularTaskId in {@code newGranularTaskIds}.
      * All-or-nothing: throws {@link InsufficientCapacityException} on the first
-     * unroutable deliverable so the whole transaction rolls back cleanly.
-     */
-    @Transactional
-    public void route(int campaignId) {
-        route(campaignId, Collections.emptyMap(), false);
-    }
-
-    public void route(int campaignId,
-                      Map<String, List<WorkTaskAnswerRequest.AnswerItem>> questionnaireByGranularTaskId) {
-        route(campaignId, questionnaireByGranularTaskId, false);
-    }
-
-    /**
+     * unroutable task so the whole transaction rolls back cleanly.
+     *
+     * @param newGranularTaskIds   the granular task IDs to route (exactly one work_task created per entry)
      * @param questionnaireByGranularTaskId answers from the request form, keyed by {@code granular_task_id}
      * @param autoAssign when true, each task (except TASK-OTHER) is immediately assigned to the best
      *                   available user in its role; falls back to HELD if no user is available.
      */
     @Transactional
     public void route(int campaignId,
+                      List<String> newGranularTaskIds,
                       Map<String, List<WorkTaskAnswerRequest.AnswerItem>> questionnaireByGranularTaskId,
                       boolean autoAssign) {
         log.info("ROUTING start | campaignId={}", campaignId);
@@ -101,10 +91,10 @@ public class RoutingEngineService {
         Campaign campaign = campaignRepo.findById(campaignId)
                 .orElseThrow(() -> new IllegalArgumentException("Campaign not found: " + campaignId));
 
-        List<RoutingTarget> targets = collectRoutingTargets(campaign);
+        List<RoutingTarget> targets = collectRoutingTargets(newGranularTaskIds);
 
         if (targets.isEmpty()) {
-            log.info("ROUTING skip — no unrouted deliverables | campaignId={}", campaignId);
+            log.info("ROUTING skip — no tasks to route | campaignId={}", campaignId);
             campaignRepo.updateStatus(campaignId, CampaignStatus.IN_PROGRESS);
             return;
         }
@@ -125,7 +115,7 @@ public class RoutingEngineService {
                 throw new InsufficientCapacityException(
                         "No role mapping configured for deliverable "
                                 + (t.granularTaskId == null ? "(no task id)" : t.granularTaskId),
-                        capacityReport(campaignId));
+                        buildCapacityReport(targets));
             }
             boolean ok = assignTask(campaignId, requestorId, t.granularTaskId, t.roleId, qa, autoAssign);
             if (!ok) {
@@ -134,7 +124,7 @@ public class RoutingEngineService {
                 throw new InsufficientCapacityException(
                         "No active users found in role '" + t.roleId + "'. "
                                 + "Please add team members to this role before submitting.",
-                        capacityReport(campaignId));
+                        buildCapacityReport(targets));
             }
         }
 
@@ -143,63 +133,27 @@ public class RoutingEngineService {
     }
 
     /**
-     * Collects the deliverables that still need a work_task. Only CANCELLED
-     * tasks are treated as "no longer routed" — all other statuses (including
-     * HELD, which is now the initial state for every new task) mean a work
-     * task already exists for that deliverable slot. Falls back to the legacy
-     * role/task mapping when a campaign has no deliverables (older test data).
+     * Builds one {@link RoutingTarget} per granularTaskId in the given list.
+     * The caller is responsible for passing only the NEW task IDs to route —
+     * no slot-counting is needed since there is no longer a campaign_deliverables
+     * intermediate table.
      */
-    private List<RoutingTarget> collectRoutingTargets(Campaign campaign) {
-        int campaignId = campaign.getCampaignId();
-        String defaultRoleId = null; // requirement_type_id removed; role resolved per granular task
-
-        List<CampaignDeliverable> specs    = campaignRepo.findDeliverablesByCampaignId(campaignId);
-        List<WorkTask>            existing = workTaskRepo.findByCampaignId(campaignId);
-
-        // HELD tasks ARE counted as "already routed" — they are the initial state
-        // for every newly created task; only CANCELLED slots need re-filling.
-        java.util.Set<String> liveRoutedKeys = existing.stream()
-                .filter(t -> t.getStatus() != TaskStatus.CANCELLED)
-                .map(WorkTask::getGranularTaskId)
-                .filter(java.util.Objects::nonNull)
-                .collect(Collectors.toSet());
-
+    private List<RoutingTarget> collectRoutingTargets(List<String> newGranularTaskIds) {
         List<RoutingTarget> targets = new ArrayList<>();
-        if (!specs.isEmpty()) {
-            for (CampaignDeliverable spec : specs) {
-                if (spec.getGranularTaskId() != null
-                        && liveRoutedKeys.contains(spec.getGranularTaskId())) {
-                    continue;
-                }
-                String roleId = resolveRole(spec.getGranularTaskId(), defaultRoleId);
-                targets.add(new RoutingTarget(spec.getGranularTaskId(), roleId));
-            }
-        } else if (existing.isEmpty() && defaultRoleId != null) {
-            List<RoleTask> roleTasks = routingConfigRepo.findRoleTaskMappingsByRole(defaultRoleId);
-            if (roleTasks.isEmpty()) {
-                    targets.add(new RoutingTarget(null, defaultRoleId));
-                } else {
-                    for (RoleTask t : roleTasks) {
-                        targets.add(new RoutingTarget(t.getTaskId(), defaultRoleId));
-                }
-            }
+        if (newGranularTaskIds == null) return targets;
+        for (String gid : newGranularTaskIds) {
+            String roleId = resolveRole(gid, null);
+            targets.add(new RoutingTarget(gid, roleId));
         }
         return targets;
     }
 
     /**
-     * Read-only capacity snapshot for the marketing-head approval gate.
-     *
-     * <p>For every un-routed deliverable on the campaign, we resolve its
-     * target role and aggregate per-role demand against the live workload of
-     * each active user in that role. The marketing head uses {@code blocked}
-     * + {@code users[].openTasks} to decide which low-priority tasks to
-     * hold before retrying the approval.
+     * Builds a capacity snapshot for the given routing targets.
+     * Shows per-role demand vs. available users so the manager can decide
+     * which low-priority tasks to hold before retrying.
      */
-    public CapacityReport capacityReport(int campaignId) {
-        Campaign campaign = campaignRepo.findById(campaignId)
-                .orElseThrow(() -> new IllegalArgumentException("Campaign not found: " + campaignId));
-        List<RoutingTarget> targets = collectRoutingTargets(campaign);
+    private CapacityReport buildCapacityReport(List<RoutingTarget> targets) {
 
         Map<String, Integer> requiredByRole = new LinkedHashMap<>();
         for (RoutingTarget t : targets) {
@@ -283,12 +237,12 @@ public class RoutingEngineService {
                     "Parent campaign is already " + campaign.getStatus() + " — cannot reassign held task.");
         }
 
-        String defaultRoleId = null; // requirement_type_id removed; role resolved per granular task
-        String roleId = resolveRole(task.getGranularTaskId(), defaultRoleId);
+        String roleId = resolveRole(task.getGranularTaskId(), null);
         if (roleId == null) {
+            List<RoutingTarget> singleTarget = List.of(new RoutingTarget(task.getGranularTaskId(), null));
             throw new InsufficientCapacityException(
                     "No role mapping configured for this task — cannot reassign.",
-                    capacityReport(task.getCampaignId()));
+                    buildCapacityReport(singleTarget));
         }
 
         int requestorId = campaign.getRequestorId() == null ? -1 : campaign.getRequestorId();

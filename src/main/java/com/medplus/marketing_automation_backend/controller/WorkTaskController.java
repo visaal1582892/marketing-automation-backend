@@ -2,6 +2,7 @@ package com.medplus.marketing_automation_backend.controller;
 
 import com.medplus.marketing_automation_backend.domain.AssetInfo;
 import com.medplus.marketing_automation_backend.domain.WorkTask;
+import com.medplus.marketing_automation_backend.dto.MyTasksListResponse;
 import com.medplus.marketing_automation_backend.dto.TaskSubmissionRequest;
 import com.medplus.marketing_automation_backend.dto.WorkTaskResponse;
 import com.medplus.marketing_automation_backend.exception.BadRequestException;
@@ -33,10 +34,23 @@ public class WorkTaskController {
         this.campaignRepo    = campaignRepo;
     }
 
-    /** List all tasks assigned to the currently authenticated user. */
+    /**
+     * Paginated task list for the currently authenticated user.
+     *
+     * @param q           free-text search (task ID, campaign ID, task name, requestor name)
+     * @param statusGroup tab filter: OPEN | QC | DONE | HELD | CANCELLED | ALL
+     * @param page        0-based page index (default 0)
+     * @param size        page size (default 10)
+     */
     @GetMapping("/my")
-    public List<WorkTaskResponse> listMy(@AuthenticationPrincipal CustomUserDetails principal) {
-        return workTaskService.listMy(principal.getUser().getUserId().intValue());
+    public MyTasksListResponse listMy(
+            @AuthenticationPrincipal CustomUserDetails principal,
+            @RequestParam(required = false)             String q,
+            @RequestParam(required = false, defaultValue = "ALL") String statusGroup,
+            @RequestParam(defaultValue = "0")           int page,
+            @RequestParam(defaultValue = "10")          int size) {
+        return workTaskService.listMyPaged(
+                principal.getUser().getUserId().intValue(), q, statusGroup, page, size);
     }
 
     /** Get a specific task (must belong to the authenticated user). */
