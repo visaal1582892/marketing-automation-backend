@@ -1,5 +1,6 @@
 package com.medplus.marketing_automation_backend.controller;
 
+import com.medplus.marketing_automation_backend.dto.CampaignDashboardSummaryResponse;
 import com.medplus.marketing_automation_backend.dto.CampaignRequest;
 import com.medplus.marketing_automation_backend.dto.CampaignResponse;
 import com.medplus.marketing_automation_backend.dto.CampaignUpdateRequest;
@@ -113,6 +114,17 @@ public class CampaignController {
     @GetMapping("/bookmarked")
     public List<CampaignResponse> bookmarked(@AuthenticationPrincipal CustomUserDetails principal) {
         return campaignService.listBookmarked(principal.getUser().getUserId().intValue());
+    }
+
+    /**
+     * Aggregated campaign status counts for the caller's own campaigns.
+     * Powers the requestor dashboard KPI cards without loading the full campaign list.
+     */
+    @GetMapping("/dashboard-summary")
+    public CampaignDashboardSummaryResponse dashboardSummary(
+            @AuthenticationPrincipal CustomUserDetails principal) {
+        int requestorId = principal.getUser().getUserId().intValue();
+        return campaignService.getDashboardSummary(requestorId);
     }
 
     /**

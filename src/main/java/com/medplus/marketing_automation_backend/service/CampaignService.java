@@ -244,6 +244,11 @@ public class CampaignService {
         return PagedResponse.of(mapped, raw.totalElements(), raw.page(), raw.size());
     }
 
+    /** Aggregated campaign counts for the requestor dashboard (no pagination). */
+    public CampaignDashboardSummaryResponse getDashboardSummary(int requestorId) {
+        return campaignRepo.countDashboardSummaryByRequestorId(requestorId);
+    }
+
     /** Returns only the campaigns bookmarked by this user, in bookmark order. */
     public List<CampaignResponse> listBookmarked(int userId) {
         java.util.Set<Integer> ids = bookmarkRepo.findBookmarkedCampaignIds(userId);

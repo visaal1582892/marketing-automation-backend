@@ -391,20 +391,36 @@ public class WorkTaskRepository {
     }
 
     /**
-     * Resumes a HELD task by task ID only — called when the requestor saves
-     * updated answers, implicitly acknowledging the worker's comment.
-     * No userId guard (caller is the requestor, not the worker).
+     * Resumes a HELD task by task ID only — called when all worker comments are answered,
+     * implicitly clearing the hold without any worker action.
+     * No userId guard (caller is the requestor or assignee, not necessarily the worker).
+     *
+     * Restores exactly to pre_hold_status:
+     *   - pre_hold_status = ASSIGNED  → back to ASSIGNED; accepted_at/started_at untouched
+     *     (worker has not accepted yet; auto-answering a comment must not start the timer)
+     *   - pre_hold_status = IN_PROGRESS or REWORK → back to IN_PROGRESS; stamps timestamps
+     *     only if not already set (task was actively running before hold)
      */
     public int clearHoldByTaskId(String taskId) {
         return jdbc.update("""
                 UPDATE work_tasks
                    SET status          = CASE
-                                            WHEN COALESCE(pre_hold_status, 'ASSIGNED') IN ('ASSIGNED','IN_PROGRESS','REWORK')
+                                            WHEN COALESCE(pre_hold_status, 'ASSIGNED') = 'ASSIGNED'
+                                              THEN 'ASSIGNED'
+                                            WHEN COALESCE(pre_hold_status, 'ASSIGNED') IN ('IN_PROGRESS','REWORK')
                                               THEN 'IN_PROGRESS'
                                             ELSE COALESCE(pre_hold_status, 'ASSIGNED')
                                          END,
-                       accepted_at     = COALESCE(accepted_at, CURRENT_TIMESTAMP(6)),
-                       started_at      = COALESCE(started_at, accepted_at, CURRENT_TIMESTAMP(6)),
+                       accepted_at     = CASE
+                                            WHEN COALESCE(pre_hold_status, 'ASSIGNED') = 'ASSIGNED'
+                                              THEN accepted_at
+                                            ELSE COALESCE(accepted_at, CURRENT_TIMESTAMP(6))
+                                         END,
+                       started_at      = CASE
+                                            WHEN COALESCE(pre_hold_status, 'ASSIGNED') = 'ASSIGNED'
+                                              THEN started_at
+                                            ELSE COALESCE(started_at, accepted_at, CURRENT_TIMESTAMP(6))
+                                         END,
                        pre_hold_status = NULL
                  WHERE task_id = :id
                    AND status  = 'HELD'

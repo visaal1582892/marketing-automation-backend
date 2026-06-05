@@ -1,6 +1,7 @@
 package com.medplus.marketing_automation_backend.repository;
 
 import com.medplus.marketing_automation_backend.domain.Campaign;
+import com.medplus.marketing_automation_backend.dto.CampaignDashboardSummaryResponse;
 import com.medplus.marketing_automation_backend.dto.PagedResponse;
 import com.medplus.marketing_automation_backend.enums.CampaignStatus;
 import com.medplus.marketing_automation_backend.enums.Priority;
@@ -450,6 +451,29 @@ public class CampaignRepository {
                 params, CampaignRepository::map);
 
         return PagedResponse.of(content, total, page, size);
+    }
+
+    /**
+     * Aggregated campaign status counts for a single requestor (dashboard KPIs).
+     */
+    public CampaignDashboardSummaryResponse countDashboardSummaryByRequestorId(int requestorId) {
+        return jdbc.queryForObject("""
+                SELECT COUNT(*) AS total,
+                       COALESCE(SUM(status = 'COMPLETED'), 0) AS completed,
+                       COALESCE(SUM(status = 'REJECTED'), 0)  AS rejected,
+                       COALESCE(SUM(status = 'CANCELLED'), 0) AS cancelled,
+                       COALESCE(SUM(status NOT IN ('COMPLETED', 'REJECTED', 'CANCELLED')), 0) AS active
+                  FROM campaigns
+                 WHERE requestor_id = :requestorId
+                """,
+                new MapSqlParameterSource("requestorId", requestorId),
+                (rs, rowNum) -> CampaignDashboardSummaryResponse.builder()
+                        .total(rs.getLong("total"))
+                        .completed(rs.getLong("completed"))
+                        .rejected(rs.getLong("rejected"))
+                        .cancelled(rs.getLong("cancelled"))
+                        .active(rs.getLong("active"))
+                        .build());
     }
 
     // -------------------------------------------------------------------------

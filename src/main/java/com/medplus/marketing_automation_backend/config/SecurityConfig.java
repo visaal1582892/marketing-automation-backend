@@ -120,14 +120,11 @@ public class SecurityConfig {
                         .requestMatchers("/ws/**").permitAll()
                         // Master data reads are open to any authenticated user (form dropdowns)
                         .requestMatchers(org.springframework.http.HttpMethod.GET,  "/api/master/**").authenticated()
-                        // Master data writes — Admin and Marketing Manager can manage lookup tables
-                        .requestMatchers(org.springframework.http.HttpMethod.POST,   "/api/master/**").hasAnyRole("ADMIN", "MARKETING_MANAGER")
-                        .requestMatchers(org.springframework.http.HttpMethod.PUT,    "/api/master/**").hasAnyRole("ADMIN", "MARKETING_MANAGER")
-                        .requestMatchers(org.springframework.http.HttpMethod.DELETE, "/api/master/**").hasAnyRole("ADMIN", "MARKETING_MANAGER")
-                        // User management and Question Library are open to Admin and Marketing Manager
-                        .requestMatchers("/api/admin/users", "/api/admin/users/**").hasAnyRole("ADMIN", "MARKETING_MANAGER")
-                        .requestMatchers("/api/admin/questions", "/api/admin/questions/**").hasAnyRole("ADMIN", "MARKETING_MANAGER")
-                        // Everything else under /api/admin/** is Admin-only
+                        // Master data writes — Admin only
+                        .requestMatchers(org.springframework.http.HttpMethod.POST,   "/api/master/**").hasRole("ADMIN")
+                        .requestMatchers(org.springframework.http.HttpMethod.PUT,    "/api/master/**").hasRole("ADMIN")
+                        .requestMatchers(org.springframework.http.HttpMethod.DELETE, "/api/master/**").hasRole("ADMIN")
+                        // All admin APIs — Admin only
                         .requestMatchers("/api/admin/**").hasRole("ADMIN")
                         .requestMatchers("/api/manager/**").hasAnyRole("ADMIN", "MARKETING_MANAGER", "PROCUREMENT_MANAGER")
                         .requestMatchers("/api/notifications/**").authenticated()
